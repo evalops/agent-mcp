@@ -184,7 +184,7 @@ func TestCheckApprovalNoApprovals(t *testing.T) {
 
 func TestCheckApprovalPending(t *testing.T) {
 	mockApprovals := &mockApprovalService{
-		pendingIDs: []string{"apr_123", "apr_456"},
+		approvalStates: map[string]string{"apr_123": "pending", "apr_456": "pending"},
 	}
 	_, handler := approvalsv1connect.NewApprovalServiceHandler(mockApprovals)
 	appSrv := httptest.NewServer(handler)
@@ -215,7 +215,7 @@ func TestCheckApprovalPending(t *testing.T) {
 }
 
 func TestCheckApprovalResolved(t *testing.T) {
-	mockApprovals := &mockApprovalService{pendingIDs: []string{"apr_other"}}
+	mockApprovals := &mockApprovalService{approvalStates: map[string]string{"apr_other": "pending"}}
 	_, handler := approvalsv1connect.NewApprovalServiceHandler(mockApprovals)
 	appSrv := httptest.NewServer(handler)
 	defer appSrv.Close()
@@ -265,13 +265,28 @@ func (m *mockGovernanceService) EvaluateAction(_ context.Context, _ *connect.Req
 
 type mockApprovalService struct {
 	approvalsv1connect.UnimplementedApprovalServiceHandler
-	approvalID string
-	pendingIDs []string
+	approvalID     string
+	pendingIDs     []string
+	approvalStates map[string]string
 }
 
 func (m *mockApprovalService) RequestApproval(_ context.Context, _ *connect.Request[approvalsv1.RequestApprovalRequest]) (*connect.Response[approvalsv1.RequestApprovalResponse], error) {
 	return connect.NewResponse(&approvalsv1.RequestApprovalResponse{
 		ApprovalRequest: &approvalsv1.ApprovalRequest{Id: m.approvalID},
+	}), nil
+}
+
+func (m *mockApprovalService) GetApproval(_ context.Context, req *connect.Request[approvalsv1.GetApprovalRequest]) (*connect.Response[approvalsv1.GetApprovalResponse], error) {
+	id := req.Msg.GetApprovalRequestId()
+	state := "resolved"
+	if m.approvalStates != nil {
+		if s, ok := m.approvalStates[id]; ok {
+			state = s
+		}
+	}
+	return connect.NewResponse(&approvalsv1.GetApprovalResponse{
+		ApprovalRequest: &approvalsv1.ApprovalRequest{Id: id},
+		State:           state,
 	}), nil
 }
 
