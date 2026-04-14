@@ -54,7 +54,7 @@ func (rc *requestContext) toolReportUsage(
 	}
 	requestID := uuid.New().String()
 
-	req := connect.NewRequest(&meterv1.RecordUsageRequest{
+	clonedMsg := proto.Clone(&meterv1.RecordUsageRequest{
 		AgentId:      agentID,
 		Surface:      surface,
 		EventType:    eventType,
@@ -64,10 +64,7 @@ func (rc *requestContext) toolReportUsage(
 		OutputTokens: input.OutputTokens,
 		TotalCostUsd: input.CostUSD,
 		RequestId:    requestID,
-	})
-	if agentToken != "" {
-		req.Header().Set("Authorization", "Bearer "+agentToken)
-	}
+	}).(*meterv1.RecordUsageRequest)
 
 	if rc.deps.Breakers != nil && !rc.deps.Breakers.Meter.Allow() {
 		rc.logger.Warn("meter circuit breaker open -- skipping usage report (fail-open)", "agent_id", agentID, "model", input.Model)
@@ -90,7 +87,6 @@ func (rc *requestContext) toolReportUsage(
 
 	// Fire-and-forget: send usage to meter service in background so the agent
 	// doesn't block on downstream metering latency.
-	clonedMsg := proto.Clone(req.Msg).(*meterv1.RecordUsageRequest)
 	bgCtx := context.WithoutCancel(ctx)
 	go func() {
 		bgStart := time.Now()
