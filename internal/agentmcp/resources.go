@@ -11,6 +11,44 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const protocolInstructions = "## EvalOps Agent Protocol\n" +
+	"\n" +
+	"### Session Lifecycle\n" +
+	"\n" +
+	"1. **Start of session**: Call `evalops_register` with your agent_type " +
+	"(e.g. \"coding_agent\"), surface (e.g. \"cli\", \"ide\", \"slack\"), " +
+	"and any user_token for authentication.\n" +
+	"\n" +
+	"2. **Every 60 seconds**: Call `evalops_heartbeat` to maintain session " +
+	"liveness and registry presence. Failure to heartbeat will mark the agent " +
+	"as unavailable after 3 missed intervals.\n" +
+	"\n" +
+	"3. **End of session**: Call `evalops_deregister` to cleanly revoke the " +
+	"session. If omitted, the session expires based on TTL.\n" +
+	"\n" +
+	"### Governance Protocol\n" +
+	"\n" +
+	"Before executing actions that modify state \u2014 file writes, shell commands, " +
+	"API calls, database mutations, sending messages, or accessing external " +
+	"services \u2014 call `evalops_check_action` with:\n" +
+	"- `action_type`: category of action (e.g. \"file_write\", \"shell_exec\", " +
+	"\"api_call\", \"message_send\")\n" +
+	"- `description`: human-readable summary of what the action will do\n" +
+	"- `risk_level`: your assessment \u2014 LOW, MEDIUM, HIGH, or CRITICAL\n" +
+	"\n" +
+	"**Responses:**\n" +
+	"- `allow` \u2014 proceed with the action\n" +
+	"- `deny` \u2014 do not execute; explain the denial reason to the user\n" +
+	"- `require_approval` \u2014 call `evalops_check_approval` with the returned " +
+	"approval_request_id. Poll every 3 seconds until the state is no longer " +
+	"\"pending\".\n" +
+	"\n" +
+	"### Usage Reporting\n" +
+	"\n" +
+	"After each LLM inference call, report usage via `evalops_report_usage` " +
+	"with model name, input/output token counts, and cost if known. This " +
+	"enables cost attribution and budget enforcement.\n"
+
 func registerResources(server *mcpsdk.Server, deps *Deps, sessionID string) {
 	server.AddResource(&mcpsdk.Resource{
 		URI:         "evalops://agent/status",
@@ -24,7 +62,7 @@ func registerResources(server *mcpsdk.Server, deps *Deps, sessionID string) {
 	server.AddResource(&mcpsdk.Resource{
 		URI:         "evalops://agent/habits",
 		Name:        "Approval Habits",
-		Description: "Learned approval habits for this workspace — patterns the system has observed and their auto-approve confidence",
+		Description: "Learned approval habits for this workspace \u2014 patterns the system has observed and their auto-approve confidence",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
 		return readApprovalHabits(ctx, deps, sessionID)
@@ -38,6 +76,15 @@ func registerResources(server *mcpsdk.Server, deps *Deps, sessionID string) {
 	}, func(ctx context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
 		return readOperatingRules(ctx, deps, sessionID)
 	})
+
+	server.AddResource(&mcpsdk.Resource{
+		URI:         "evalops://agent/instructions",
+		Name:        "Agent Protocol",
+		Description: "Integration protocol for EvalOps \u2014 when and how to call each tool",
+		MIMEType:    "text/markdown",
+	}, func(_ context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+		return readProtocolInstructions(deps)
+	})
 }
 
 func readAgentStatus(deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, error) {
@@ -45,7 +92,7 @@ func readAgentStatus(deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, 
 	if !ok {
 		return jsonResource("evalops://agent/status", map[string]any{
 			"registered": false,
-			"message":    "no active session — call evalops_register first",
+			"message":    "no active session \u2014 call evalops_register first",
 		})
 	}
 	return jsonResource("evalops://agent/status", map[string]any{
@@ -153,6 +200,18 @@ func readOperatingRules(ctx context.Context, deps *Deps, sessionID string) (*mcp
 		"available": true,
 		"rules":     rules,
 	})
+}
+
+func readProtocolInstructions(_ *Deps) (*mcpsdk.ReadResourceResult, error) {
+	return &mcpsdk.ReadResourceResult{
+		Contents: []*mcpsdk.ResourceContents{
+			{
+				URI:      "evalops://agent/instructions",
+				MIMEType: "text/markdown",
+				Text:     protocolInstructions,
+			},
+		},
+	}, nil
 }
 
 func jsonResource(uri string, data any) (*mcpsdk.ReadResourceResult, error) {
