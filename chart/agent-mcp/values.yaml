@@ -1,0 +1,21 @@
+image:
+  repository: ghcr.io/evalops/agent-mcp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+env:
+  addr: ":8080"
+  identityBaseURL: ""
+  registryBaseURL: ""
+  governanceBaseURL: ""
+  approvalsBaseURL: ""
+  meterBaseURL: ""
+  memoryBaseURL: ""
+  environment: production
+  version: "0.1.0"
+
+resources: {}
