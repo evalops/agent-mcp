@@ -51,27 +51,36 @@ type MemoryConfig struct {
 	TLS            mtls.ClientConfig
 }
 
+type NATSConfig struct {
+	URL     string
+	Stream  string
+	Subject string
+}
+
 type Config struct {
-	ServiceName  string
-	Environment  string
-	Version      string
-	Addr         string
-	StartupRetry startup.Config
-	TLS          mtls.ServerConfig
-	Identity     IdentityConfig
-	Registry     RegistryConfig
-	Governance   GovernanceConfig
-	Approvals    ApprovalsConfig
-	Meter        MeterConfig
-	Memory       MemoryConfig
+	ServiceName          string
+	Environment          string
+	Version              string
+	Addr                 string
+	SessionReapInterval  time.Duration
+	StartupRetry         startup.Config
+	TLS                  mtls.ServerConfig
+	Identity             IdentityConfig
+	Registry             RegistryConfig
+	Governance           GovernanceConfig
+	Approvals            ApprovalsConfig
+	Meter                MeterConfig
+	Memory               MemoryConfig
+	NATS                 NATSConfig
 }
 
 func Load() Config {
 	return Config{
-		ServiceName: envOrDefault("SERVICE_NAME", "agent-mcp"),
-		Environment: envOrDefault("ENVIRONMENT", "development"),
-		Version:     envOrDefault("VERSION", "dev"),
-		Addr:        envOrDefault("ADDR", ":8080"),
+		ServiceName:         envOrDefault("SERVICE_NAME", "agent-mcp"),
+		Environment:         envOrDefault("ENVIRONMENT", "development"),
+		Version:             envOrDefault("VERSION", "dev"),
+		Addr:                envOrDefault("ADDR", ":8080"),
+		SessionReapInterval: envOrDefaultDuration("SESSION_REAP_INTERVAL", 30*time.Second),
 		StartupRetry: startup.Config{
 			MaxAttempts: envOrDefaultInt("STARTUP_MAX_ATTEMPTS", startup.DefaultMaxAttempts),
 			Delay:       envOrDefaultDuration("STARTUP_DELAY", startup.DefaultDelay),
@@ -144,6 +153,11 @@ func Load() Config {
 				KeyFile:    trimEnv("MEMORY_KEY_FILE"),
 				ServerName: trimEnv("MEMORY_SERVER_NAME"),
 			},
+		},
+		NATS: NATSConfig{
+			URL:     trimEnv("NATS_URL"),
+			Stream:  envOrDefault("NATS_STREAM", "agent_mcp_events"),
+			Subject: envOrDefault("NATS_SUBJECT_PREFIX", "agent-mcp.events"),
 		},
 	}
 }

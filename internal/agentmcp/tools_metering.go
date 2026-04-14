@@ -3,6 +3,7 @@ package agentmcp
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"connectrpc.com/connect"
 	meterv1 "github.com/evalops/proto/gen/go/meter/v1"
@@ -64,9 +65,17 @@ func (rc *requestContext) toolReportUsage(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
+	start := time.Now()
 	if _, err := rc.deps.Meter.RecordUsage(ctx, req); err != nil {
+		rc.deps.Metrics.DownstreamErrors.WithLabelValues("meter").Inc()
+		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
+		rc.logger.Error("meter record usage failed", "error", err)
 		return nil, reportUsageOutput{}, fmt.Errorf("meter record usage failed: %w", err)
 	}
+	rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
+
+	rc.deps.Metrics.UsageReports.Inc()
+	rc.logger.Info("usage reported", "agent_id", agentID, "model", input.Model, "input_tokens", input.InputTokens, "output_tokens", input.OutputTokens)
 
 	return nil, reportUsageOutput{Recorded: true}, nil
 }

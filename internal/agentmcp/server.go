@@ -1,7 +1,7 @@
 package agentmcp
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -25,12 +25,16 @@ type Deps struct {
 	Memory     memoryv1connect.MemoryServiceClient
 	Config     config.Config
 	Sessions   *SessionStore
+	Metrics    *Metrics
+	Events     EventPublisher
+	Logger     *slog.Logger
 }
 
 // requestContext carries per-request state needed by MCP tool handlers.
 type requestContext struct {
 	deps    *Deps
 	request *http.Request
+	logger  *slog.Logger
 }
 
 func (rc *requestContext) mcpSessionID() string {
@@ -65,7 +69,10 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 		Version: version,
 	}, nil)
 
-	rc := &requestContext{deps: deps, request: r}
+	sid := strings.TrimSpace(r.Header.Get("Mcp-Session-Id"))
+	logger := deps.Logger.With("mcp_session_id", sid)
+
+	rc := &requestContext{deps: deps, request: r, logger: logger}
 
 	// Lifecycle tools
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
@@ -100,6 +107,9 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 		Description: "Report token usage and cost to the metering service",
 	}, rc.toolReportUsage)
 
-	log.Printf("mcp: created server for session %s", strings.TrimSpace(r.Header.Get("Mcp-Session-Id")))
+	// MCP Resources
+	registerResources(server, deps, sid)
+
+	logger.Info("mcp server created")
 	return server
 }

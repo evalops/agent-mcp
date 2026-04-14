@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -14,24 +15,28 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
 	cfg := config.Load()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	handler, err := httpapi.BuildRouter(cfg)
+	result, err := httpapi.BuildRouter(cfg, logger)
 	if err != nil {
-		log.Fatalf("build router: %v", err)
+		logger.Error("build router failed", "error", err)
+		os.Exit(1)
 	}
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           handler,
+		Handler:           result.Handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	serverTLSConfig, err := mtls.BuildServerTLSConfig(cfg.TLS)
 	if err != nil {
-		log.Fatalf("configure tls: %v", err)
+		logger.Error("configure tls failed", "error", err)
+		os.Exit(1)
 	}
 	server.TLSConfig = serverTLSConfig
 
@@ -39,16 +44,18 @@ func main() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		result.Cleanup(shutdownCtx)
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("starting %s on %s", cfg.ServiceName, cfg.Addr)
+	logger.Info("starting service", "service", cfg.ServiceName, "addr", cfg.Addr)
 	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
 		err = server.ListenAndServeTLS("", "")
 	} else {
 		err = server.ListenAndServe()
 	}
 	if err != nil && err != http.ErrServerClosed {
-		log.Fatalf("listen failed: %v", err)
+		logger.Error("listen failed", "error", err)
+		os.Exit(1)
 	}
 }
