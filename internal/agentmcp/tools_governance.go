@@ -107,6 +107,16 @@ func (rc *requestContext) toolCheckAction(
 		"risk_level", riskLevel,
 		"agent_id", agentID,
 	)
+	rc.deps.Events.Publish(ctx, workspaceID, "governance_check", agentID, "evaluated", map[string]any{
+		"action_type":       input.ActionType,
+		"agent_id":          agentID,
+		"approval_required": decision == "require_approval",
+		"decision":          decision,
+		"matched_rules":     eval.GetMatchedRules(),
+		"reasons":           eval.GetReasons(),
+		"risk_level":        riskLevel,
+		"workspace_id":      workspaceID,
+	})
 
 	// If governance says REQUIRE_APPROVAL, create an approval request.
 	if decision == "require_approval" && rc.deps.Approvals != nil && rc.deps.Config.Approvals.BaseURL != "" {
@@ -117,8 +127,12 @@ func (rc *requestContext) toolCheckAction(
 		} else {
 			out.ApprovalID = approvalID
 			rc.deps.Metrics.ApprovalRequests.WithLabelValues(riskLevel).Inc()
-			rc.deps.Events.Publish(workspaceID, "approval_request", approvalID, "created", map[string]any{
-				"agent_id": agentID, "action_type": input.ActionType, "risk_level": riskLevel,
+			rc.deps.Events.Publish(ctx, workspaceID, "approval_request", approvalID, "created", map[string]any{
+				"action_type":  input.ActionType,
+				"agent_id":     agentID,
+				"approval_id":  approvalID,
+				"risk_level":   riskLevel,
+				"workspace_id": workspaceID,
 			})
 		}
 	}
@@ -228,16 +242,17 @@ func (rc *requestContext) checkApprovalOnce(
 	ctx context.Context,
 	approvalID, workspaceID, agentToken string,
 ) (*mcpsdk.CallToolResult, checkApprovalOutput, error) {
+	if rc.deps.Breakers != nil && !rc.deps.Breakers.Approvals.Allow() {
+		rc.logger.Warn("approvals circuit breaker open -- failing closed", "approval_id", approvalID)
+		return nil, checkApprovalOutput{}, fmt.Errorf("approvals service unreachable (circuit breaker open)")
+	}
+
 	req := connect.NewRequest(&approvalsv1.GetApprovalRequest{
 		ApprovalRequestId: approvalID,
 		WorkspaceId:       workspaceID,
 	})
 	if agentToken != "" {
 		req.Header().Set("Authorization", "Bearer "+agentToken)
-	}
-
-	if rc.deps.Breakers != nil && !rc.deps.Breakers.Approvals.Allow() {
-		return nil, checkApprovalOutput{}, fmt.Errorf("approvals service unreachable (circuit breaker open)")
 	}
 
 	start := time.Now()

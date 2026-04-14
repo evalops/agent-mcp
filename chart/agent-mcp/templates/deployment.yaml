@@ -11,6 +11,9 @@ metadata:
 {{- if and (eq .Values.session.store "redis") (not .Values.session.redis.url) (not .Values.session.redis.existingSecretName) }}
 {{- fail "session.store=redis requires either session.redis.url or session.redis.existingSecretName" }}
 {{- end }}
+{{- if and .Values.nats.url .Values.nats.existingSecretName }}
+{{- fail "set only one of nats.url or nats.existingSecretName" }}
+{{- end }}
 spec:
   replicas: 1
   selector:
@@ -57,6 +60,10 @@ spec:
               value: {{ .Values.breaker.failureThreshold | quote }}
             - name: BREAKER_RESET_TIMEOUT
               value: {{ .Values.breaker.resetTimeout | quote }}
+            - name: NATS_STREAM
+              value: {{ .Values.nats.stream | quote }}
+            - name: NATS_SUBJECT_PREFIX
+              value: {{ .Values.nats.subjectPrefix | quote }}
             {{- if eq .Values.session.store "redis" }}
             - name: SESSION_REDIS_URL
               {{- if .Values.session.redis.existingSecretName }}
@@ -66,6 +73,17 @@ spec:
                   key: {{ .Values.session.redis.existingSecretKey | quote }}
               {{- else }}
               value: {{ .Values.session.redis.url | quote }}
+              {{- end }}
+            {{- end }}
+            {{- if or .Values.nats.url .Values.nats.existingSecretName }}
+            - name: NATS_URL
+              {{- if .Values.nats.existingSecretName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.nats.existingSecretName | quote }}
+                  key: {{ .Values.nats.existingSecretKey | quote }}
+              {{- else }}
+              value: {{ .Values.nats.url | quote }}
               {{- end }}
             {{- end }}
           readinessProbe:

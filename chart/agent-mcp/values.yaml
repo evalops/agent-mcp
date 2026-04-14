@@ -26,6 +26,13 @@ session:
     existingSecretName: ""
     existingSecretKey: SESSION_REDIS_URL
 
+nats:
+  url: ""
+  existingSecretName: ""
+  existingSecretKey: NATS_URL
+  stream: agent_mcp_events
+  subjectPrefix: agent-mcp.events
+
 breaker:
   failureThreshold: 5
   resetTimeout: 30s

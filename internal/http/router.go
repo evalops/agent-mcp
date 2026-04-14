@@ -14,6 +14,7 @@ import (
 	"github.com/evalops/service-runtime/health"
 	"github.com/evalops/service-runtime/httpkit"
 	"github.com/evalops/service-runtime/mtls"
+	"github.com/evalops/service-runtime/natsbus"
 	"github.com/evalops/service-runtime/redisutil"
 	"github.com/evalops/service-runtime/startup"
 )
@@ -74,12 +75,25 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 		logger.Info("session store: memory")
 	}
 
+	eventPublisher := agentmcp.EventPublisher(agentmcp.NoopEventPublisher{})
+	if cfg.NATS.URL != "" {
+		busPublisher, err := natsbus.Connect(ctx, cfg.NATS.URL, cfg.NATS.Stream, cfg.NATS.Subject, logger)
+		if err != nil {
+			_ = sessionStore.Close()
+			return nil, fmt.Errorf("connect nats publisher: %w", err)
+		}
+		eventPublisher = agentmcp.NewNATSEventPublisher(busPublisher, logger, busPublisher.Close)
+		logger.Info("event publisher: nats", "stream", cfg.NATS.Stream, "subject_prefix", cfg.NATS.Subject)
+	} else {
+		logger.Info("event publisher: noop")
+	}
+
 	deps := &agentmcp.Deps{
 		Identity: identityClient,
 		Config:   cfg,
 		Sessions: sessionStore,
 		Metrics:  agentmcp.NewMetrics(),
-		Events:   agentmcp.NoopEventPublisher{},
+		Events:   eventPublisher,
 		Logger:   logger,
 		Breakers: agentmcp.NewBreakers(cfg.Breaker),
 	}

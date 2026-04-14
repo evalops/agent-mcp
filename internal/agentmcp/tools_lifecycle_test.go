@@ -70,6 +70,8 @@ func TestToolRegister(t *testing.T) {
 	defer srv.Close()
 
 	deps := newTestDeps(srv)
+	recorder := &recordingEventPublisher{}
+	deps.Events = recorder
 	rc := newRequestContext(deps, "mcp_sess_1")
 
 	_, out, err := rc.toolRegister(context.Background(), nil, registerInput{
@@ -92,6 +94,15 @@ func TestToolRegister(t *testing.T) {
 	}
 	if state.AgentToken != "tok_new" {
 		t.Fatalf("expected tok_new, got %s", state.AgentToken)
+	}
+	if len(recorder.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(recorder.events))
+	}
+	if recorder.events[0].operation != "registered" {
+		t.Fatalf("expected registered event, got %q", recorder.events[0].operation)
+	}
+	if recorder.events[0].attrs["agent_id"] != "agent_test" {
+		t.Fatalf("expected agent_id in register event, got %#v", recorder.events[0].attrs["agent_id"])
 	}
 }
 
@@ -177,6 +188,8 @@ func TestToolHeartbeat(t *testing.T) {
 	defer srv.Close()
 
 	deps := newTestDeps(srv)
+	recorder := &recordingEventPublisher{}
+	deps.Events = recorder
 	deps.Sessions.Set("mcp_sess_1", &SessionState{
 		AgentID: "agent_test", AgentToken: "tok_old", ExpiresAt: time.Now().Add(time.Hour),
 		RunID: "run_test", Surface: "cli",
@@ -194,6 +207,15 @@ func TestToolHeartbeat(t *testing.T) {
 	state, _ := deps.Sessions.Get("mcp_sess_1")
 	if state.AgentToken != "tok_rotated" {
 		t.Fatalf("expected tok_rotated, got %s", state.AgentToken)
+	}
+	if len(recorder.events) != 1 {
+		t.Fatalf("expected 1 heartbeat event, got %d", len(recorder.events))
+	}
+	if recorder.events[0].operation != "heartbeat" {
+		t.Fatalf("expected heartbeat event, got %q", recorder.events[0].operation)
+	}
+	if recorder.events[0].attrs["agent_id"] != "agent_test" {
+		t.Fatalf("expected heartbeat agent_id, got %#v", recorder.events[0].attrs["agent_id"])
 	}
 }
 
@@ -249,6 +271,8 @@ func TestToolDeregister(t *testing.T) {
 	defer srv.Close()
 
 	deps := newTestDeps(srv)
+	recorder := &recordingEventPublisher{}
+	deps.Events = recorder
 	deps.Sessions.Set("mcp_sess_1", &SessionState{
 		AgentID: "agent_test", AgentToken: "tok_old", Surface: "cli",
 	})
@@ -260,6 +284,15 @@ func TestToolDeregister(t *testing.T) {
 	}
 	if !out.Deregistered {
 		t.Fatal("expected deregistered=true")
+	}
+	if len(recorder.events) != 1 {
+		t.Fatalf("expected 1 deregister event, got %d", len(recorder.events))
+	}
+	if recorder.events[0].operation != "deregistered" {
+		t.Fatalf("expected deregistered event, got %q", recorder.events[0].operation)
+	}
+	if recorder.events[0].attrs["agent_id"] != "agent_test" {
+		t.Fatalf("expected deregistered agent_id, got %#v", recorder.events[0].attrs["agent_id"])
 	}
 	if _, ok := deps.Sessions.Get("mcp_sess_1"); ok {
 		t.Fatal("expected session to be deleted")

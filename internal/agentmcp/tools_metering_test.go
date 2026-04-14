@@ -49,7 +49,7 @@ func TestReportUsageWithMeter(t *testing.T) {
 		Meter:    clients.NewMeterClient(meterSrv.URL, meterSrv.Client()),
 		Sessions: NewSessionStore(),
 		Metrics:  NewTestMetrics(),
-		Events:   NoopEventPublisher{},
+		Events:   &recordingEventPublisher{},
 		Breakers: NewBreakers(config.BreakerConfig{FailureThreshold: 5}),
 		Logger:   testLogger,
 	}
@@ -80,6 +80,13 @@ func TestReportUsageWithMeter(t *testing.T) {
 	}
 	if mockMeter.lastModel != "claude-sonnet-4-6" {
 		t.Fatalf("expected claude-sonnet-4-6, got %s", mockMeter.lastModel)
+	}
+	recorder := deps.Events.(*recordingEventPublisher)
+	if len(recorder.events) != 1 {
+		t.Fatalf("expected 1 usage event, got %d", len(recorder.events))
+	}
+	if recorder.events[0].aggregateType != "usage_report" || recorder.events[0].operation != "recorded" {
+		t.Fatalf("unexpected usage event %#v", recorder.events[0])
 	}
 }
 

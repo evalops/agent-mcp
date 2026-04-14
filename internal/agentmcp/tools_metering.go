@@ -39,16 +39,19 @@ func (rc *requestContext) toolReportUsage(
 	agentID := ""
 	agentToken := ""
 	surface := ""
+	workspaceID := ""
 	if state != nil {
 		agentID = state.AgentID
 		agentToken = state.AgentToken
 		surface = state.Surface
+		workspaceID = state.WorkspaceID
 	}
 
 	eventType := input.EventType
 	if eventType == "" {
 		eventType = "inference"
 	}
+	requestID := uuid.New().String()
 
 	req := connect.NewRequest(&meterv1.RecordUsageRequest{
 		AgentId:      agentID,
@@ -59,7 +62,7 @@ func (rc *requestContext) toolReportUsage(
 		InputTokens:  input.InputTokens,
 		OutputTokens: input.OutputTokens,
 		TotalCostUsd: input.CostUSD,
-		RequestId:    uuid.New().String(),
+		RequestId:    requestID,
 	})
 	if agentToken != "" {
 		req.Header().Set("Authorization", "Bearer "+agentToken)
@@ -85,6 +88,18 @@ func (rc *requestContext) toolReportUsage(
 	rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
 
 	rc.deps.Metrics.UsageReports.Inc()
+	rc.deps.Events.Publish(ctx, workspaceID, "usage_report", requestID, "recorded", map[string]any{
+		"agent_id":      agentID,
+		"cost_usd":      input.CostUSD,
+		"event_type":    eventType,
+		"input_tokens":  input.InputTokens,
+		"model":         input.Model,
+		"output_tokens": input.OutputTokens,
+		"provider":      input.Provider,
+		"request_id":    requestID,
+		"surface":       surface,
+		"workspace_id":  workspaceID,
+	})
 	rc.logger.Info("usage reported", "agent_id", agentID, "model", input.Model, "input_tokens", input.InputTokens, "output_tokens", input.OutputTokens)
 
 	return nil, reportUsageOutput{Recorded: true}, nil

@@ -135,8 +135,16 @@ func (rc *requestContext) toolRegister(
 	}
 
 	rc.deps.Metrics.Registrations.WithLabelValues(input.AgentType, input.Surface).Inc()
-	rc.deps.Events.Publish(input.WorkspaceID, "agent", session.AgentID, "registered", map[string]any{
-		"agent_type": input.AgentType, "surface": input.Surface, "registry_visible": registryVisible,
+	rc.deps.Events.Publish(ctx, input.WorkspaceID, "agent", session.AgentID, "registered", map[string]any{
+		"agent_id":         session.AgentID,
+		"agent_type":       input.AgentType,
+		"expires_at":       session.ExpiresAt.Format(time.RFC3339Nano),
+		"registry_visible": registryVisible,
+		"run_id":           session.RunID,
+		"scopes_denied":    session.ScopesDenied,
+		"scopes_granted":   session.ScopesGranted,
+		"surface":          input.Surface,
+		"workspace_id":     input.WorkspaceID,
 	})
 
 	return nil, registerOutput{
@@ -226,6 +234,15 @@ func (rc *requestContext) toolHeartbeat(
 	}
 
 	rc.deps.Metrics.Heartbeats.Inc()
+	rc.deps.Events.Publish(ctx, state.WorkspaceID, "agent", state.AgentID, "heartbeat", map[string]any{
+		"agent_id":     state.AgentID,
+		"agent_type":   state.AgentType,
+		"expires_at":   session.ExpiresAt.Format(time.RFC3339Nano),
+		"renewed":      true,
+		"run_id":       state.RunID,
+		"surface":      state.Surface,
+		"workspace_id": state.WorkspaceID,
+	})
 	rc.logger.Info("heartbeat completed", "agent_id", state.AgentID)
 
 	return nil, heartbeatOutput{
@@ -301,7 +318,13 @@ func (rc *requestContext) toolDeregister(
 	rc.deps.Sessions.Delete(sid)
 	rc.deps.Metrics.ActiveSessions.Set(float64(rc.deps.Sessions.ActiveCount()))
 	rc.deps.Metrics.Deregistrations.Inc()
-	rc.deps.Events.Publish(state.WorkspaceID, "agent", agentID, "deregistered", nil)
+	rc.deps.Events.Publish(ctx, state.WorkspaceID, "agent", agentID, "deregistered", map[string]any{
+		"agent_id":     agentID,
+		"agent_type":   state.AgentType,
+		"run_id":       state.RunID,
+		"surface":      state.Surface,
+		"workspace_id": state.WorkspaceID,
+	})
 	rc.logger.Info("agent deregistered", "agent_id", agentID)
 
 	return nil, deregisterOutput{AgentID: agentID, Deregistered: true}, nil

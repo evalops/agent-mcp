@@ -82,6 +82,9 @@ All configuration is via environment variables:
 | `SESSION_STORE` | No | `memory` | Session backend: `memory` or `redis` |
 | `SESSION_REDIS_URL` | With `SESSION_STORE=redis` | — | Redis URL for shared session persistence |
 | `SESSION_REAP_INTERVAL` | No | `30s` | Expiry sweep interval for the in-memory session backend |
+| `NATS_URL` | No | — | Shared NATS URL for durable lifecycle and governance event publishing |
+| `NATS_STREAM` | No | `agent_mcp_events` | JetStream stream used for event envelopes |
+| `NATS_SUBJECT_PREFIX` | No | `agent-mcp.events` | Subject prefix used when publishing event changes |
 | `BREAKER_FAILURE_THRESHOLD` | No | `5` | Consecutive downstream failures before a breaker opens |
 | `BREAKER_RESET_TIMEOUT` | No | `30s` | Time before an open breaker allows a half-open probe |
 | `ADDR` | No | `:8080` | Listen address |
@@ -90,7 +93,7 @@ Each downstream service is optional — if its URL is not configured, the corres
 
 All services support mTLS via `*_CA_FILE`, `*_CERT_FILE`, `*_KEY_FILE`, `*_SERVER_NAME` env vars.
 
-The Helm chart exposes `session.store`, `session.redis.url`, and `session.redis.existingSecretName` so Redis-backed sessions can be enabled without rebuilding the service. Prefer a secret-backed Redis URL for production credentials.
+The Helm chart exposes `session.store`, `session.redis.url`, `session.redis.existingSecretName`, `nats.url`, and `nats.existingSecretName` so shared Redis sessions and durable NATS event publishing can be enabled without rebuilding the service. Prefer secret-backed URLs for production credentials.
 
 ## Running locally
 

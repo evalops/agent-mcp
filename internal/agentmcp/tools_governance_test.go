@@ -91,7 +91,7 @@ func TestCheckActionWithGovernance(t *testing.T) {
 		Governance: clients.NewGovernanceClient(govSrv.URL, govSrv.Client()),
 		Sessions:   NewSessionStore(),
 		Metrics:    NewTestMetrics(),
-		Events:     NoopEventPublisher{},
+		Events:     &recordingEventPublisher{},
 		Logger:     testLogger,
 	}
 
@@ -114,6 +114,13 @@ func TestCheckActionWithGovernance(t *testing.T) {
 	}
 	if len(out.Reasons) != 1 || out.Reasons[0] != "destructive command" {
 		t.Fatalf("unexpected reasons: %v", out.Reasons)
+	}
+	recorder := deps.Events.(*recordingEventPublisher)
+	if len(recorder.events) != 1 {
+		t.Fatalf("expected 1 governance event, got %d", len(recorder.events))
+	}
+	if recorder.events[0].aggregateType != "governance_check" || recorder.events[0].operation != "evaluated" {
+		t.Fatalf("unexpected governance event %#v", recorder.events[0])
 	}
 }
 
@@ -141,7 +148,7 @@ func TestCheckActionRequireApproval(t *testing.T) {
 		Approvals:  clients.NewApprovalsClient(appSrv.URL, appSrv.Client()),
 		Sessions:   NewSessionStore(),
 		Metrics:    NewTestMetrics(),
-		Events:     NoopEventPublisher{},
+		Events:     &recordingEventPublisher{},
 		Logger:     testLogger,
 	}
 
@@ -165,6 +172,16 @@ func TestCheckActionRequireApproval(t *testing.T) {
 	}
 	if out.ApprovalID != "apr_test_123" {
 		t.Fatalf("expected apr_test_123, got %s", out.ApprovalID)
+	}
+	recorder := deps.Events.(*recordingEventPublisher)
+	if len(recorder.events) != 2 {
+		t.Fatalf("expected 2 governance-related events, got %d", len(recorder.events))
+	}
+	if recorder.events[0].aggregateType != "governance_check" || recorder.events[0].operation != "evaluated" {
+		t.Fatalf("unexpected first event %#v", recorder.events[0])
+	}
+	if recorder.events[1].aggregateType != "approval_request" || recorder.events[1].operation != "created" {
+		t.Fatalf("unexpected second event %#v", recorder.events[1])
 	}
 }
 
