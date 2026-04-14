@@ -1,13 +1,16 @@
 package http
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"time"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/evalops/agent-mcp/internal/agentmcp"
 	"github.com/evalops/agent-mcp/internal/config"
 )
 
@@ -15,7 +18,7 @@ var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Le
 
 func TestBuildRouterValidation(t *testing.T) {
 	cfg := config.Config{Addr: ":8080"}
-	_, err := BuildRouter(cfg, testLogger)
+	_, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err == nil {
 		t.Fatal("expected validation error for missing IDENTITY_BASE_URL")
 	}
@@ -24,6 +27,10 @@ func TestBuildRouterValidation(t *testing.T) {
 func TestHealthEndpoints(t *testing.T) {
 	// Use a fake identity server for the health check.
 	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer identitySrv.Close()
@@ -31,12 +38,13 @@ func TestHealthEndpoints(t *testing.T) {
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
-		Version: "test", SessionReapInterval: 30 * time.Second,
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
 			BaseURL: identitySrv.URL,
 		},
 	}
-	result, err := BuildRouter(cfg, testLogger)
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,21 +69,17 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestReadyzFailsWhenIdentityDown(t *testing.T) {
-	// Identity server that returns 500.
-	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer identitySrv.Close()
-
+	// Use a port nothing listens on so the health check request fails to connect.
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
-		Version: "test", SessionReapInterval: 30 * time.Second,
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
-			BaseURL: identitySrv.URL,
+			BaseURL: "http://127.0.0.1:19999",
 		},
 	}
-	result, err := BuildRouter(cfg, testLogger)
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,8 +93,45 @@ func TestReadyzFailsWhenIdentityDown(t *testing.T) {
 	}
 }
 
+func TestReadyzFailsWhenIdentityHealthzReturnsError(t *testing.T) {
+	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer identitySrv.Close()
+
+	cfg := config.Config{
+		ServiceName: "test",
+		Addr:        ":8080",
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
+		Identity: config.IdentityConfig{
+			BaseURL: identitySrv.URL,
+		},
+	}
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer result.Cleanup(nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	result.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when /healthz returns 500, got %d", rec.Code)
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer identitySrv.Close()
@@ -98,12 +139,13 @@ func TestMetricsEndpoint(t *testing.T) {
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
-		Version: "test", SessionReapInterval: 30 * time.Second,
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
 			BaseURL: identitySrv.URL,
 		},
 	}
-	result, err := BuildRouter(cfg, testLogger)
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,6 +161,10 @@ func TestMetricsEndpoint(t *testing.T) {
 
 func TestOptionalServicesWiring(t *testing.T) {
 	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer identitySrv.Close()
@@ -126,15 +172,16 @@ func TestOptionalServicesWiring(t *testing.T) {
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
-		Version: "test", SessionReapInterval: 30 * time.Second,
-		Identity:    config.IdentityConfig{BaseURL: identitySrv.URL},
-		Registry:    config.RegistryConfig{BaseURL: "http://registry:8080"},
-		Governance:  config.GovernanceConfig{BaseURL: "http://governance:8080"},
-		Approvals:   config.ApprovalsConfig{BaseURL: "http://approvals:8080"},
-		Meter:       config.MeterConfig{BaseURL: "http://meter:8080"},
-		Memory:      config.MemoryConfig{BaseURL: "http://memory:8080"},
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker:    config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
+		Identity:   config.IdentityConfig{BaseURL: identitySrv.URL},
+		Registry:   config.RegistryConfig{BaseURL: "http://registry:8080"},
+		Governance: config.GovernanceConfig{BaseURL: "http://governance:8080"},
+		Approvals:  config.ApprovalsConfig{BaseURL: "http://approvals:8080"},
+		Meter:      config.MeterConfig{BaseURL: "http://meter:8080"},
+		Memory:     config.MemoryConfig{BaseURL: "http://memory:8080"},
 	}
-	result, err := BuildRouter(cfg, testLogger)
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,5 +202,48 @@ func TestOptionalServicesWiring(t *testing.T) {
 	}
 	if result.Deps.Memory == nil {
 		t.Fatal("expected memory client to be wired")
+	}
+}
+
+func TestCleanupSkipsDeregisterForRedisSessions(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+
+	deregisterCalls := 0
+	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/agents/deregister":
+			deregisterCalls++
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer identitySrv.Close()
+
+	cfg := config.Config{
+		ServiceName: "test",
+		Addr:        ":8080",
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker:  config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
+		Identity: config.IdentityConfig{BaseURL: identitySrv.URL},
+		Session:  config.SessionConfig{Store: "redis", RedisURL: "redis://" + redisServer.Addr()},
+	}
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	result.Deps.Sessions.Set("sess_1", &agentmcp.SessionState{
+		AgentID:    "agent_1",
+		AgentToken: "tok_1",
+		ExpiresAt:  time.Now().Add(time.Hour),
+	})
+
+	result.Cleanup(context.Background())
+
+	if deregisterCalls != 0 {
+		t.Fatalf("expected redis-backed cleanup to skip deregistration, got %d calls", deregisterCalls)
 	}
 }
