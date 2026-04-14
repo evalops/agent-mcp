@@ -13,6 +13,7 @@ import (
 	"github.com/evalops/agent-mcp/internal/config"
 	"github.com/evalops/service-runtime/health"
 	"github.com/evalops/service-runtime/httpkit"
+	"github.com/evalops/service-runtime/natsbus"
 	"github.com/evalops/service-runtime/mtls"
 	"github.com/evalops/service-runtime/redisutil"
 	"github.com/evalops/service-runtime/startup"
@@ -82,6 +83,17 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 		Events:   agentmcp.NoopEventPublisher{},
 		Logger:   logger,
 		Breakers: agentmcp.NewBreakers(cfg.Breaker),
+	}
+
+	// Wire NATS event publishing when configured.
+	if cfg.NATS.URL != "" {
+		natsPublisher, err := natsbus.Connect(ctx, cfg.NATS.URL, cfg.NATS.Stream, cfg.NATS.Subject, logger)
+		if err != nil {
+			logger.Warn("NATS connection failed, using noop event publisher", "error", err)
+		} else {
+			deps.Events = agentmcp.NewNATSEventPublisher(natsPublisher, logger)
+			logger.Info("event publisher: nats", "stream", cfg.NATS.Stream, "subject", cfg.NATS.Subject)
+		}
 	}
 
 	if cfg.Registry.BaseURL != "" {
