@@ -176,7 +176,7 @@ func Load() Config {
 			ResetTimeout:     envOrDefaultDuration("BREAKER_RESET_TIMEOUT", 30*time.Second),
 		},
 		Session: SessionConfig{
-			Store:    envOrDefault("SESSION_STORE", "memory"),
+			Store:    strings.ToLower(envOrDefault("SESSION_STORE", "memory")),
 			RedisURL: trimEnv("SESSION_REDIS_URL"),
 		},
 	}
@@ -189,8 +189,14 @@ func (c Config) Validate() error {
 	if c.Identity.BaseURL == "" {
 		return fmt.Errorf("IDENTITY_BASE_URL is required")
 	}
-	if c.Session.Store == "redis" && c.Session.RedisURL == "" {
-		return fmt.Errorf("SESSION_REDIS_URL is required when SESSION_STORE=redis")
+	switch c.Session.Store {
+	case "", "memory":
+	case "redis":
+		if c.Session.RedisURL == "" {
+			return fmt.Errorf("SESSION_REDIS_URL is required when SESSION_STORE=redis")
+		}
+	default:
+		return fmt.Errorf("SESSION_STORE must be one of memory or redis")
 	}
 	return nil
 }

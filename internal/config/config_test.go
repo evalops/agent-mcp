@@ -50,3 +50,34 @@ func TestValidateRequiresIdentity(t *testing.T) {
 		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
+
+func TestValidateRequiresRedisURLForRedisSessionStore(t *testing.T) {
+	t.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
+	t.Setenv("SESSION_STORE", "redis")
+
+	cfg := Load()
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for redis session store without redis URL")
+	}
+}
+
+func TestValidateRejectsUnknownSessionStore(t *testing.T) {
+	t.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
+	t.Setenv("SESSION_STORE", "sqlite")
+
+	cfg := Load()
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for unknown session store")
+	}
+}
+
+func TestLoadNormalizesSessionStoreCase(t *testing.T) {
+	t.Setenv("SESSION_STORE", "ReDiS")
+
+	cfg := Load()
+	if cfg.Session.Store != "redis" {
+		t.Fatalf("expected normalized session store redis, got %q", cfg.Session.Store)
+	}
+}

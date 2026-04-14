@@ -79,11 +79,18 @@ All configuration is via environment variables:
 | `APPROVALS_BASE_URL` | No | — | Approvals service base URL (enables approval workflows) |
 | `METER_BASE_URL` | No | — | Meter service base URL (enables cost tracking) |
 | `MEMORY_BASE_URL` | No | — | Memory service base URL (enables operating rules) |
+| `SESSION_STORE` | No | `memory` | Session backend: `memory` or `redis` |
+| `SESSION_REDIS_URL` | With `SESSION_STORE=redis` | — | Redis URL for shared session persistence |
+| `SESSION_REAP_INTERVAL` | No | `30s` | Expiry sweep interval for the in-memory session backend |
+| `BREAKER_FAILURE_THRESHOLD` | No | `5` | Consecutive downstream failures before a breaker opens |
+| `BREAKER_RESET_TIMEOUT` | No | `30s` | Time before an open breaker allows a half-open probe |
 | `ADDR` | No | `:8080` | Listen address |
 
 Each downstream service is optional — if its URL is not configured, the corresponding tools degrade gracefully (governance returns allow, metering is a no-op, etc.).
 
 All services support mTLS via `*_CA_FILE`, `*_CERT_FILE`, `*_KEY_FILE`, `*_SERVER_NAME` env vars.
+
+The Helm chart exposes `session.store`, `session.redis.url`, and `session.redis.existingSecretName` so Redis-backed sessions can be enabled without rebuilding the service. Prefer a secret-backed Redis URL for production credentials.
 
 ## Running locally
 

@@ -18,4 +18,16 @@ env:
   environment: production
   version: "0.1.0"
 
+session:
+  store: memory
+  reapInterval: 30s
+  redis:
+    url: ""
+    existingSecretName: ""
+    existingSecretKey: SESSION_REDIS_URL
+
+breaker:
+  failureThreshold: 5
+  resetTimeout: 30s
+
 resources: {}
