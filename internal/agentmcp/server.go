@@ -24,10 +24,37 @@ type Deps struct {
 	Meter      meterv1connect.MeterServiceClient
 	Memory     memoryv1connect.MemoryServiceClient
 	Config     config.Config
-	Sessions   *SessionStore
+	Sessions   SessionBackend
 	Metrics    *Metrics
 	Events     EventPublisher
 	Logger     *slog.Logger
+	Breakers   *Breakers
+}
+
+// Breakers holds circuit breakers wired into downstream call paths.
+// Breakers holds circuit breakers for each downstream service.
+type Breakers struct {
+	Identity   *Breaker
+	Registry   *Breaker
+	Governance *Breaker
+	Approvals  *Breaker
+	Meter      *Breaker
+	Memory     *Breaker
+}
+
+func NewBreakers(cfg config.BreakerConfig) *Breakers {
+	bc := BreakerConfig{
+		FailureThreshold: cfg.FailureThreshold,
+		ResetTimeout:     cfg.ResetTimeout,
+	}
+	return &Breakers{
+		Identity:   NewBreaker(bc),
+		Registry:   NewBreaker(bc),
+		Governance: NewBreaker(bc),
+		Approvals:  NewBreaker(bc),
+		Meter:      NewBreaker(bc),
+		Memory:     NewBreaker(bc),
+	}
 }
 
 // requestContext carries per-request state needed by MCP tool handlers.
@@ -74,7 +101,6 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 
 	rc := &requestContext{deps: deps, request: r, logger: logger}
 
-	// Lifecycle tools
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_register",
 		Description: "Register this agent with EvalOps — creates identity session and registry presence in one call",
@@ -90,7 +116,6 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 		Description: "Deregister the agent — revokes identity session and removes registry presence",
 	}, rc.toolDeregister)
 
-	// Governance tools
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_check_action",
 		Description: "Evaluate an action against governance policies — returns allow, deny, or require_approval with risk level",
@@ -101,13 +126,11 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 		Description: "Check the status of a pending approval request",
 	}, rc.toolCheckApproval)
 
-	// Metering tools
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_report_usage",
 		Description: "Report token usage and cost to the metering service",
 	}, rc.toolReportUsage)
 
-	// MCP Resources
 	registerResources(server, deps, sid)
 
 	logger.Info("mcp server created")

@@ -6,58 +6,72 @@ import (
 	"time"
 )
 
-// SessionState holds per-MCP-session agent state. Token rotation on heartbeat
-// is managed internally so the external agent never sees rotated tokens.
+// SessionState holds per-MCP-session agent state.
 type SessionState struct {
-	AgentID        string
-	AgentToken     string
-	AgentType      string
-	Capabilities   []string
-	ExpiresAt      time.Time
-	OrganizationID string
-	RunID          string
-	Surface        string
-	WorkspaceID    string
+	AgentID        string    `json:"agent_id"`
+	AgentToken     string    `json:"agent_token"`
+	AgentType      string    `json:"agent_type"`
+	Capabilities   []string  `json:"capabilities,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	OrganizationID string    `json:"organization_id,omitempty"`
+	RunID          string    `json:"run_id"`
+	Surface        string    `json:"surface"`
+	WorkspaceID    string    `json:"workspace_id,omitempty"`
 }
 
-// SessionStore manages per-MCP-session state keyed by the Mcp-Session-Id header.
-type SessionStore struct {
+// SessionBackend is the interface for session persistence.
+// Implemented by MemorySessionStore and RedisSessionStore.
+type SessionBackend interface {
+	Get(sessionID string) (*SessionState, bool)
+	Set(sessionID string, state *SessionState)
+	Delete(sessionID string)
+	ActiveCount() int
+	All() map[string]*SessionState
+	SweepExpired(now time.Time) int
+	Close() error
+}
+
+// MemorySessionStore is an in-memory session store for local development.
+type MemorySessionStore struct {
 	mu    sync.RWMutex
 	store map[string]*SessionState
 }
 
-func NewSessionStore() *SessionStore {
-	return &SessionStore{store: make(map[string]*SessionState)}
+func NewMemorySessionStore() *MemorySessionStore {
+	return &MemorySessionStore{store: make(map[string]*SessionState)}
 }
 
-func (s *SessionStore) Get(sessionID string) (*SessionState, bool) {
+// NewSessionStore returns a MemorySessionStore. Kept for backward compatibility.
+func NewSessionStore() *MemorySessionStore {
+	return NewMemorySessionStore()
+}
+
+func (s *MemorySessionStore) Get(sessionID string) (*SessionState, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	state, ok := s.store[sessionID]
 	return state, ok
 }
 
-func (s *SessionStore) Set(sessionID string, state *SessionState) {
+func (s *MemorySessionStore) Set(sessionID string, state *SessionState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store[sessionID] = state
 }
 
-func (s *SessionStore) Delete(sessionID string) {
+func (s *MemorySessionStore) Delete(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.store, sessionID)
 }
 
-// ActiveCount returns the number of active sessions.
-func (s *SessionStore) ActiveCount() int {
+func (s *MemorySessionStore) ActiveCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.store)
 }
 
-// All returns a snapshot of all sessions. Used for graceful shutdown.
-func (s *SessionStore) All() map[string]*SessionState {
+func (s *MemorySessionStore) All() map[string]*SessionState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snapshot := make(map[string]*SessionState, len(s.store))
@@ -67,9 +81,7 @@ func (s *SessionStore) All() map[string]*SessionState {
 	return snapshot
 }
 
-// SweepExpired removes sessions that have passed their ExpiresAt time.
-// Returns the number of sessions removed.
-func (s *SessionStore) SweepExpired(now time.Time) int {
+func (s *MemorySessionStore) SweepExpired(now time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	removed := 0
@@ -82,9 +94,13 @@ func (s *SessionStore) SweepExpired(now time.Time) int {
 	return removed
 }
 
+// Close is a no-op for the in-memory store.
+func (s *MemorySessionStore) Close() error {
+	return nil
+}
+
 // RunExpiryReaper starts a background goroutine that sweeps expired sessions.
-// Returns a stop function.
-func RunExpiryReaper(store *SessionStore, interval time.Duration, logger *slog.Logger) func() {
+func RunExpiryReaper(store SessionBackend, interval time.Duration, logger *slog.Logger) func() {
 	ticker := time.NewTicker(interval)
 	done := make(chan struct{})
 	go func() {
