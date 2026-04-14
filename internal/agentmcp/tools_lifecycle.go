@@ -231,13 +231,18 @@ func (rc *requestContext) toolHeartbeat(
 			agentToken := session.AgentToken
 			workspaceID := state.WorkspaceID
 			go func() {
+				// Detach from the request cancellation while still bounding the
+				// downstream RPC lifetime.
+				hbCtx, cancel := detachedContextWithTimeout(ctx, rc.deps.Config.Registry.RequestTimeout)
+				defer cancel()
+
 				hbStart := time.Now()
 				hbReq := connect.NewRequest(clonedMsg)
 				hbReq.Header().Set("Authorization", "Bearer "+agentToken)
 				if workspaceID != "" {
 					hbReq.Header().Set("X-Workspace-ID", workspaceID)
 				}
-				if _, err := rc.deps.Registry.Heartbeat(context.WithoutCancel(ctx), hbReq); err != nil {
+				if _, err := rc.deps.Registry.Heartbeat(hbCtx, hbReq); err != nil {
 					rc.deps.Metrics.DownstreamErrors.WithLabelValues("registry").Inc()
 					if rc.deps.Breakers != nil {
 						rc.deps.Breakers.Registry.RecordFailure()

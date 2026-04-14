@@ -3,6 +3,7 @@ package agentmcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -257,6 +258,67 @@ func TestToolHeartbeatWithRegistry(t *testing.T) {
 	}
 }
 
+func TestToolHeartbeatBackgroundRegistryCallUsesConfiguredTimeout(t *testing.T) {
+	type timeoutResult struct {
+		err         error
+		elapsed     time.Duration
+		hasDeadline bool
+	}
+
+	done := make(chan timeoutResult, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(clients.AgentSession{
+			AgentID: "agent_test", AgentToken: "tok_rotated", ExpiresAt: time.Now().Add(time.Hour),
+		})
+	}))
+	defer srv.Close()
+
+	mockRegistry := &mockAgentService{
+		heartbeatFunc: func(ctx context.Context, _ *connect.Request[agentsv1.HeartbeatRequest]) (*connect.Response[agentsv1.HeartbeatResponse], error) {
+			_, hasDeadline := ctx.Deadline()
+			start := time.Now()
+			select {
+			case <-ctx.Done():
+				done <- timeoutResult{err: ctx.Err(), elapsed: time.Since(start), hasDeadline: hasDeadline}
+				return nil, ctx.Err()
+			case <-time.After(200 * time.Millisecond):
+				done <- timeoutResult{err: errors.New("background registry heartbeat did not time out"), elapsed: time.Since(start), hasDeadline: hasDeadline}
+				return connect.NewResponse(&agentsv1.HeartbeatResponse{}), nil
+			}
+		},
+	}
+	_, handler := agentsv1connect.NewAgentServiceHandler(mockRegistry)
+	registrySrv := httptest.NewServer(handler)
+	defer registrySrv.Close()
+
+	deps := newTestDeps(srv)
+	deps.Registry = clients.NewRegistryClient(registrySrv.URL, registrySrv.Client())
+	deps.Config.Registry = config.RegistryConfig{BaseURL: registrySrv.URL, RequestTimeout: 20 * time.Millisecond}
+	deps.Sessions.Set("mcp_sess_1", &SessionState{
+		AgentID: "agent_test", AgentToken: "tok_old", Surface: "cli", WorkspaceID: "ws_1",
+	})
+
+	rc := newRequestContext(deps, "mcp_sess_1")
+	if _, _, err := rc.toolHeartbeat(context.Background(), nil, heartbeatInput{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case result := <-done:
+		if result.err == nil {
+			t.Fatal("expected background registry heartbeat to be canceled by timeout")
+		}
+		if result.elapsed >= 150*time.Millisecond {
+			t.Fatalf("expected timeout-bound background registry heartbeat, got elapsed=%v err=%v", result.elapsed, result.err)
+		}
+		if !result.hasDeadline {
+			t.Fatal("expected background registry heartbeat context to carry a deadline")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for background registry heartbeat timeout")
+	}
+}
+
 func TestToolHeartbeatNoSession(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
@@ -353,6 +415,7 @@ type mockAgentService struct {
 	registerCalled   int
 	heartbeatCalled  atomic.Int32 // atomic: called from background goroutine
 	deregisterCalled int
+	heartbeatFunc    func(context.Context, *connect.Request[agentsv1.HeartbeatRequest]) (*connect.Response[agentsv1.HeartbeatResponse], error)
 }
 
 func (m *mockAgentService) Register(_ context.Context, _ *connect.Request[agentsv1.RegisterRequest]) (*connect.Response[agentsv1.RegisterResponse], error) {
@@ -360,8 +423,11 @@ func (m *mockAgentService) Register(_ context.Context, _ *connect.Request[agents
 	return connect.NewResponse(&agentsv1.RegisterResponse{}), nil
 }
 
-func (m *mockAgentService) Heartbeat(_ context.Context, _ *connect.Request[agentsv1.HeartbeatRequest]) (*connect.Response[agentsv1.HeartbeatResponse], error) {
+func (m *mockAgentService) Heartbeat(ctx context.Context, req *connect.Request[agentsv1.HeartbeatRequest]) (*connect.Response[agentsv1.HeartbeatResponse], error) {
 	m.heartbeatCalled.Add(1)
+	if m.heartbeatFunc != nil {
+		return m.heartbeatFunc(ctx, req)
+	}
 	return connect.NewResponse(&agentsv1.HeartbeatResponse{}), nil
 }
 

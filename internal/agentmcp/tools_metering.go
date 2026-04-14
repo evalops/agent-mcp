@@ -85,10 +85,12 @@ func (rc *requestContext) toolReportUsage(
 	}
 	rc.logger.Info("usage reported", "agent_id", agentID, "model", input.Model, "input_tokens", input.InputTokens, "output_tokens", input.OutputTokens)
 
-	// Fire-and-forget: send usage to meter service in background so the agent
-	// doesn't block on downstream metering latency.
-	bgCtx := context.WithoutCancel(ctx)
 	go func() {
+		// Detach from the request cancellation while still bounding the
+		// downstream RPC lifetime.
+		bgCtx, cancel := detachedContextWithTimeout(ctx, rc.deps.Config.Meter.RequestTimeout)
+		defer cancel()
+
 		bgStart := time.Now()
 		bgReq := connect.NewRequest(clonedMsg)
 		if agentToken != "" {
