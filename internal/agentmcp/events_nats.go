@@ -26,12 +26,6 @@ func (p *NATSEventPublisher) Publish(tenantID, aggregateType, aggregateID, opera
 		Operation:     operation,
 		RecordedAt:    time.Now().UTC(),
 	})
-	p.logger.Info("event published",
-		"tenant_id", tenantID,
-		"aggregate_type", aggregateType,
-		"aggregate_id", aggregateID,
-		"operation", operation,
-	)
 }
 
 func (p *NATSEventPublisher) Close() {
