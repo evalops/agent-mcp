@@ -46,6 +46,7 @@ linters:
       - path: internal/agentmcp/tools_lifecycle\.go
         linters:
           - gocritic
-      - linters:
+      - path: (internal/agentmcp/(breaker|events|server|session|session_redis)\.go|internal/clients/identity\.go|internal/config/config\.go|internal/http/router\.go)
+        linters:
           - revive
         text: "exported: exported"
