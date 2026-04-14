@@ -74,8 +74,7 @@ func (rc *requestContext) toolReportUsage(
 		return nil, reportUsageOutput{Recorded: false}, nil
 	}
 
-	rc.deps.Metrics.UsageReports.Inc()
-	rc.deps.Events.Publish(ctx, workspaceID, "usage_report", requestID, "recorded", map[string]any{
+	eventAttrs := map[string]any{
 		"agent_id":      agentID,
 		"cost_usd":      input.CostUSD,
 		"event_type":    eventType,
@@ -86,19 +85,20 @@ func (rc *requestContext) toolReportUsage(
 		"request_id":    requestID,
 		"surface":       surface,
 		"workspace_id":  workspaceID,
-	})
+	}
 	rc.logger.Info("usage reported", "agent_id", agentID, "model", input.Model, "input_tokens", input.InputTokens, "output_tokens", input.OutputTokens)
 
 	// Fire-and-forget: send usage to meter service in background so the agent
 	// doesn't block on downstream metering latency.
 	clonedMsg := proto.Clone(req.Msg).(*meterv1.RecordUsageRequest)
+	bgCtx := context.WithoutCancel(ctx)
 	go func() {
 		bgStart := time.Now()
 		bgReq := connect.NewRequest(clonedMsg)
 		if agentToken != "" {
 			bgReq.Header().Set("Authorization", "Bearer "+agentToken)
 		}
-		if _, err := rc.deps.Meter.RecordUsage(context.WithoutCancel(ctx), bgReq); err != nil {
+		if _, err := rc.deps.Meter.RecordUsage(bgCtx, bgReq); err != nil {
 			rc.deps.Metrics.DownstreamErrors.WithLabelValues("meter").Inc()
 			if rc.deps.Breakers != nil {
 				rc.deps.Breakers.Meter.RecordFailure()
@@ -108,6 +108,8 @@ func (rc *requestContext) toolReportUsage(
 			if rc.deps.Breakers != nil {
 				rc.deps.Breakers.Meter.RecordSuccess()
 			}
+			rc.deps.Metrics.UsageReports.Inc()
+			rc.deps.Events.Publish(bgCtx, workspaceID, "usage_report", requestID, "recorded", eventAttrs)
 		}
 		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(bgStart).Seconds())
 	}()
