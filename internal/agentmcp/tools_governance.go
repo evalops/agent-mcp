@@ -73,6 +73,7 @@ func (rc *requestContext) toolCheckAction(
 	rc.deps.Metrics.DownstreamLatency.WithLabelValues("governance", "evaluate_action").Observe(time.Since(start).Seconds())
 	if err != nil {
 		rc.deps.Metrics.DownstreamErrors.WithLabelValues("governance").Inc()
+		rc.deps.Metrics.GovernanceChecks.WithLabelValues("deny", "unknown").Inc()
 		if rc.deps.Breakers != nil {
 			rc.deps.Breakers.Governance.RecordFailure()
 		}

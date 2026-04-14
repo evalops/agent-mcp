@@ -16,6 +16,7 @@ import (
 	"github.com/evalops/proto/gen/go/approvals/v1/approvalsv1connect"
 	governancev1 "github.com/evalops/proto/gen/go/governance/v1"
 	"github.com/evalops/proto/gen/go/governance/v1/governancev1connect"
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestDecisionString(t *testing.T) {
@@ -114,6 +115,55 @@ func TestCheckActionWithGovernance(t *testing.T) {
 	}
 	if len(out.Reasons) != 1 || out.Reasons[0] != "destructive command" {
 		t.Fatalf("unexpected reasons: %v", out.Reasons)
+	}
+}
+
+func TestCheckActionGovernanceFailureCountsDeniedCheck(t *testing.T) {
+	mockGov := &mockGovernanceService{
+		evaluateActionErr: connect.NewError(connect.CodeUnavailable, errors.New("governance unavailable")),
+	}
+	_, handler := governancev1connect.NewGovernanceServiceHandler(mockGov)
+	govSrv := httptest.NewServer(handler)
+	defer govSrv.Close()
+
+	deps := &Deps{
+		Config: config.Config{
+			ServiceName: "test", Version: "test",
+			Governance: config.GovernanceConfig{BaseURL: govSrv.URL},
+		},
+		Governance: clients.NewGovernanceClient(govSrv.URL, govSrv.Client()),
+		Sessions:   NewSessionStore(),
+		Metrics:    NewTestMetrics(),
+		Events:     NoopEventPublisher{},
+		Breakers:   NewBreakers(config.BreakerConfig{FailureThreshold: 5}),
+		Logger:     testLogger,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	rc := &requestContext{deps: deps, request: req, logger: testLogger}
+
+	_, out, err := rc.toolCheckAction(context.Background(), nil, checkActionInput{
+		ActionType:    "Bash",
+		ActionPayload: "rm -rf /",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Decision != "deny" {
+		t.Fatalf("expected deny, got %s", out.Decision)
+	}
+
+	deniedUnknown, err := deps.Metrics.GovernanceChecks.GetMetricWithLabelValues("deny", "unknown")
+	if err != nil {
+		t.Fatalf("get deny/unknown metric: %v", err)
+	}
+
+	metric := &dto.Metric{}
+	if err := deniedUnknown.Write(metric); err != nil {
+		t.Fatalf("write metric: %v", err)
+	}
+	if got := metric.GetCounter().GetValue(); got != 1 {
+		t.Fatalf("expected deny/unknown governance checks to equal 1, got %v", got)
 	}
 }
 
@@ -293,12 +343,16 @@ func TestCheckApprovalUsesCircuitBreaker(t *testing.T) {
 
 type mockGovernanceService struct {
 	governancev1connect.UnimplementedGovernanceServiceHandler
-	decision  governancev1.ActionDecision
-	riskLevel governancev1.RiskLevel
-	reasons   []string
+	decision          governancev1.ActionDecision
+	riskLevel         governancev1.RiskLevel
+	reasons           []string
+	evaluateActionErr error
 }
 
 func (m *mockGovernanceService) EvaluateAction(_ context.Context, _ *connect.Request[governancev1.EvaluateActionRequest]) (*connect.Response[governancev1.EvaluateActionResponse], error) {
+	if m.evaluateActionErr != nil {
+		return nil, m.evaluateActionErr
+	}
 	return connect.NewResponse(&governancev1.EvaluateActionResponse{
 		Evaluation: &governancev1.ActionEvaluation{
 			Decision:  m.decision,
