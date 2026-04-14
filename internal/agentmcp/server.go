@@ -94,7 +94,9 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{
 		Name:    "evalops-agent-mcp",
 		Version: version,
-	}, nil)
+	}, &mcpsdk.ServerOptions{
+		Instructions: "EvalOps agent governance server. Read the evalops://agent/instructions resource for the full integration protocol \u2014 session lifecycle, governance checks, and usage reporting.",
+	})
 
 	sid := strings.TrimSpace(r.Header.Get("Mcp-Session-Id"))
 	logger := deps.Logger.With("mcp_session_id", sid)
