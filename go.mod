@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	connectrpc.com/connect v1.19.1
 	github.com/alicebob/miniredis/v2 v2.37.0
-	github.com/evalops/proto v0.0.0-20260414155640-68de13e5d0b0
+	github.com/evalops/proto v0.0.0-20260414160828-04a1f1f21db7
 	github.com/evalops/service-runtime v0.1.5
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
