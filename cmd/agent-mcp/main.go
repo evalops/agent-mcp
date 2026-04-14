@@ -44,8 +44,8 @@ func main() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		result.Cleanup(shutdownCtx)
 		_ = server.Shutdown(shutdownCtx)
+		result.Cleanup(shutdownCtx)
 	}()
 
 	logger.Info("starting service", "service", cfg.ServiceName, "addr", cfg.Addr, "session_store", cfg.Session.Store)

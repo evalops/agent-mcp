@@ -236,9 +236,22 @@ func (rc *requestContext) checkApprovalOnce(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
+	if rc.deps.Breakers != nil && !rc.deps.Breakers.Approvals.Allow() {
+		return nil, checkApprovalOutput{}, fmt.Errorf("approvals service unreachable (circuit breaker open)")
+	}
+
+	start := time.Now()
 	resp, err := rc.deps.Approvals.GetApproval(ctx, req)
+	rc.deps.Metrics.DownstreamLatency.WithLabelValues("approvals", "get_approval").Observe(time.Since(start).Seconds())
 	if err != nil {
+		rc.deps.Metrics.DownstreamErrors.WithLabelValues("approvals").Inc()
+		if rc.deps.Breakers != nil {
+			rc.deps.Breakers.Approvals.RecordFailure()
+		}
 		return nil, checkApprovalOutput{}, fmt.Errorf("get approval failed: %w", err)
+	}
+	if rc.deps.Breakers != nil {
+		rc.deps.Breakers.Approvals.RecordSuccess()
 	}
 
 	state := resp.Msg.GetState()

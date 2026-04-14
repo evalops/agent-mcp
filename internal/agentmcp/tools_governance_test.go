@@ -2,9 +2,12 @@ package agentmcp
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/evalops/agent-mcp/internal/clients"
@@ -244,6 +247,48 @@ func TestCheckApprovalResolved(t *testing.T) {
 	}
 }
 
+func TestCheckApprovalUsesCircuitBreaker(t *testing.T) {
+	mockApprovals := &mockApprovalService{
+		getApprovalErr: connect.NewError(connect.CodeUnavailable, errors.New("approvals unavailable")),
+	}
+	_, handler := approvalsv1connect.NewApprovalServiceHandler(mockApprovals)
+	appSrv := httptest.NewServer(handler)
+	defer appSrv.Close()
+
+	deps := &Deps{
+		Config: config.Config{
+			ServiceName: "test", Version: "test",
+			Approvals: config.ApprovalsConfig{BaseURL: appSrv.URL},
+			Breaker:   config.BreakerConfig{FailureThreshold: 1, ResetTimeout: time.Hour},
+		},
+		Approvals: clients.NewApprovalsClient(appSrv.URL, appSrv.Client()),
+		Sessions:  NewSessionStore(),
+		Metrics:   NewTestMetrics(),
+		Events:    NoopEventPublisher{},
+		Breakers:  NewBreakers(config.BreakerConfig{FailureThreshold: 1, ResetTimeout: time.Hour}),
+		Logger:    testLogger,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	rc := &requestContext{deps: deps, request: req, logger: testLogger}
+
+	_, _, err := rc.toolCheckApproval(context.Background(), nil, checkApprovalInput{ApprovalID: "apr_123"})
+	if err == nil || !strings.Contains(err.Error(), "get approval failed") {
+		t.Fatalf("expected downstream failure, got %v", err)
+	}
+	if got := deps.Breakers.Approvals.State(); got != BreakerOpen {
+		t.Fatalf("expected approvals breaker open, got %s", got)
+	}
+
+	_, _, err = rc.toolCheckApproval(context.Background(), nil, checkApprovalInput{ApprovalID: "apr_123"})
+	if err == nil || !strings.Contains(err.Error(), "circuit breaker open") {
+		t.Fatalf("expected breaker-open error, got %v", err)
+	}
+	if mockApprovals.getApprovalCalls != 1 {
+		t.Fatalf("expected one GetApproval call before breaker opened, got %d", mockApprovals.getApprovalCalls)
+	}
+}
+
 // Mock ConnectRPC services.
 
 type mockGovernanceService struct {
@@ -265,9 +310,11 @@ func (m *mockGovernanceService) EvaluateAction(_ context.Context, _ *connect.Req
 
 type mockApprovalService struct {
 	approvalsv1connect.UnimplementedApprovalServiceHandler
-	approvalID     string
-	pendingIDs     []string
-	approvalStates map[string]string
+	approvalID       string
+	pendingIDs       []string
+	approvalStates   map[string]string
+	getApprovalErr   error
+	getApprovalCalls int
 }
 
 func (m *mockApprovalService) RequestApproval(_ context.Context, _ *connect.Request[approvalsv1.RequestApprovalRequest]) (*connect.Response[approvalsv1.RequestApprovalResponse], error) {
@@ -277,6 +324,10 @@ func (m *mockApprovalService) RequestApproval(_ context.Context, _ *connect.Requ
 }
 
 func (m *mockApprovalService) GetApproval(_ context.Context, req *connect.Request[approvalsv1.GetApprovalRequest]) (*connect.Response[approvalsv1.GetApprovalResponse], error) {
+	m.getApprovalCalls++
+	if m.getApprovalErr != nil {
+		return nil, m.getApprovalErr
+	}
 	id := req.Msg.GetApprovalRequestId()
 	state := "resolved"
 	if m.approvalStates != nil {

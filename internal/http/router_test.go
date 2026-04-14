@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/evalops/agent-mcp/internal/agentmcp"
 	"github.com/evalops/agent-mcp/internal/config"
 )
 
@@ -200,5 +202,48 @@ func TestOptionalServicesWiring(t *testing.T) {
 	}
 	if result.Deps.Memory == nil {
 		t.Fatal("expected memory client to be wired")
+	}
+}
+
+func TestCleanupSkipsDeregisterForRedisSessions(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+
+	deregisterCalls := 0
+	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+		case "/v1/agents/deregister":
+			deregisterCalls++
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer identitySrv.Close()
+
+	cfg := config.Config{
+		ServiceName: "test",
+		Addr:        ":8080",
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker:  config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
+		Identity: config.IdentityConfig{BaseURL: identitySrv.URL},
+		Session:  config.SessionConfig{Store: "redis", RedisURL: "redis://" + redisServer.Addr()},
+	}
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	result.Deps.Sessions.Set("sess_1", &agentmcp.SessionState{
+		AgentID:    "agent_1",
+		AgentToken: "tok_1",
+		ExpiresAt:  time.Now().Add(time.Hour),
+	})
+
+	result.Cleanup(context.Background())
+
+	if deregisterCalls != 0 {
+		t.Fatalf("expected redis-backed cleanup to skip deregistration, got %d calls", deregisterCalls)
 	}
 }

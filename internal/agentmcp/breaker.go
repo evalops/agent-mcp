@@ -1,7 +1,6 @@
 package agentmcp
 
 import (
-	"errors"
 	"sync"
 	"time"
 )
@@ -14,9 +13,6 @@ const (
 	BreakerOpen                         // tripped — requests fast-fail
 	BreakerHalfOpen                     // probing — one request allowed through
 )
-
-// ErrBreakerOpen is returned when the circuit breaker is open.
-var ErrBreakerOpen = errors.New("circuit breaker open")
 
 // BreakerConfig configures a circuit breaker.
 type BreakerConfig struct {
