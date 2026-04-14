@@ -33,6 +33,19 @@ func (rc *requestContext) toolCheckAction(
 		return nil, checkActionOutput{Decision: "allow", RiskLevel: "low", Reasons: []string{"governance service not configured"}}, nil
 	}
 
+	// Circuit breaker: fail closed (deny) when governance is unreachable.
+	if rc.deps.Breakers != nil && !rc.deps.Breakers.Governance.Allow() {
+		rc.deps.Metrics.GovernanceChecks.WithLabelValues("deny", "unknown").Inc()
+		rc.logger.Warn("governance circuit breaker open — failing closed",
+			"action_type", input.ActionType,
+		)
+		return nil, checkActionOutput{
+			Decision:  "deny",
+			RiskLevel: "critical",
+			Reasons:   []string{"governance service unreachable (circuit breaker open) — failing closed for safety"},
+		}, nil
+	}
+
 	sid := rc.mcpSessionID()
 	state, _ := rc.deps.Sessions.Get(sid)
 
@@ -60,8 +73,20 @@ func (rc *requestContext) toolCheckAction(
 	rc.deps.Metrics.DownstreamLatency.WithLabelValues("governance", "evaluate_action").Observe(time.Since(start).Seconds())
 	if err != nil {
 		rc.deps.Metrics.DownstreamErrors.WithLabelValues("governance").Inc()
-		rc.logger.Error("governance evaluation failed", "action_type", input.ActionType, "error", err)
-		return nil, checkActionOutput{}, fmt.Errorf("governance evaluation failed: %w", err)
+		if rc.deps.Breakers != nil {
+			rc.deps.Breakers.Governance.RecordFailure()
+		}
+		rc.logger.Error("governance evaluation failed — failing closed", "action_type", input.ActionType, "error", err)
+		// Fail closed: return deny when governance is unreachable.
+		return nil, checkActionOutput{
+			Decision:  "deny",
+			RiskLevel: "critical",
+			Reasons:   []string{fmt.Sprintf("governance evaluation failed: %v — failing closed for safety", err)},
+		}, nil
+	}
+
+	if rc.deps.Breakers != nil {
+		rc.deps.Breakers.Governance.RecordSuccess()
 	}
 
 	eval := resp.Msg.GetEvaluation()

@@ -38,6 +38,7 @@ func newTestDeps(identitySrv *httptest.Server) *Deps {
 		Sessions: NewSessionStore(),
 		Metrics:  NewTestMetrics(),
 		Events:   NoopEventPublisher{},
+		Breakers: NewBreakers(config.BreakerConfig{FailureThreshold: 5}),
 		Logger:   testLogger,
 	}
 }

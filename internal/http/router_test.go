@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,7 @@ var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Le
 
 func TestBuildRouterValidation(t *testing.T) {
 	cfg := config.Config{Addr: ":8080"}
-	_, err := BuildRouter(cfg, testLogger)
+	_, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err == nil {
 		t.Fatal("expected validation error for missing IDENTITY_BASE_URL")
 	}
@@ -32,11 +33,12 @@ func TestHealthEndpoints(t *testing.T) {
 		ServiceName: "test",
 		Addr:        ":8080",
 		Version: "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
 			BaseURL: identitySrv.URL,
 		},
 	}
-	result, err := BuildRouter(cfg, testLogger)
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,21 +63,17 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestReadyzFailsWhenIdentityDown(t *testing.T) {
-	// Identity server that returns 500.
-	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer identitySrv.Close()
-
+	// Use a port nothing listens on — TCPCheck will fail to connect.
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
 		Version: "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
-			BaseURL: identitySrv.URL,
+			BaseURL: "http://127.0.0.1:19999",
 		},
 	}
-	result, err := BuildRouter(cfg, testLogger)
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,11 +97,12 @@ func TestMetricsEndpoint(t *testing.T) {
 		ServiceName: "test",
 		Addr:        ":8080",
 		Version: "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
 			BaseURL: identitySrv.URL,
 		},
 	}
-	result, err := BuildRouter(cfg, testLogger)
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,6 +126,7 @@ func TestOptionalServicesWiring(t *testing.T) {
 		ServiceName: "test",
 		Addr:        ":8080",
 		Version: "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity:    config.IdentityConfig{BaseURL: identitySrv.URL},
 		Registry:    config.RegistryConfig{BaseURL: "http://registry:8080"},
 		Governance:  config.GovernanceConfig{BaseURL: "http://governance:8080"},
@@ -134,7 +134,7 @@ func TestOptionalServicesWiring(t *testing.T) {
 		Meter:       config.MeterConfig{BaseURL: "http://meter:8080"},
 		Memory:      config.MemoryConfig{BaseURL: "http://memory:8080"},
 	}
-	result, err := BuildRouter(cfg, testLogger)
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

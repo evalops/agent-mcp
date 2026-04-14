@@ -57,21 +57,33 @@ type NATSConfig struct {
 	Subject string
 }
 
+type BreakerConfig struct {
+	FailureThreshold int
+	ResetTimeout     time.Duration
+}
+
+type SessionConfig struct {
+	Store    string // "memory" or "redis"
+	RedisURL string
+}
+
 type Config struct {
-	ServiceName          string
-	Environment          string
-	Version              string
-	Addr                 string
-	SessionReapInterval  time.Duration
-	StartupRetry         startup.Config
-	TLS                  mtls.ServerConfig
-	Identity             IdentityConfig
-	Registry             RegistryConfig
-	Governance           GovernanceConfig
-	Approvals            ApprovalsConfig
-	Meter                MeterConfig
-	Memory               MemoryConfig
-	NATS                 NATSConfig
+	ServiceName         string
+	Environment         string
+	Version             string
+	Addr                string
+	SessionReapInterval time.Duration
+	StartupRetry        startup.Config
+	TLS                 mtls.ServerConfig
+	Identity            IdentityConfig
+	Registry            RegistryConfig
+	Governance          GovernanceConfig
+	Approvals           ApprovalsConfig
+	Meter               MeterConfig
+	Memory              MemoryConfig
+	NATS                NATSConfig
+	Breaker             BreakerConfig
+	Session             SessionConfig
 }
 
 func Load() Config {
@@ -159,6 +171,14 @@ func Load() Config {
 			Stream:  envOrDefault("NATS_STREAM", "agent_mcp_events"),
 			Subject: envOrDefault("NATS_SUBJECT_PREFIX", "agent-mcp.events"),
 		},
+		Breaker: BreakerConfig{
+			FailureThreshold: envOrDefaultInt("BREAKER_FAILURE_THRESHOLD", 5),
+			ResetTimeout:     envOrDefaultDuration("BREAKER_RESET_TIMEOUT", 30*time.Second),
+		},
+		Session: SessionConfig{
+			Store:    envOrDefault("SESSION_STORE", "memory"),
+			RedisURL: trimEnv("SESSION_REDIS_URL"),
+		},
 	}
 }
 
@@ -168,6 +188,9 @@ func (c Config) Validate() error {
 	}
 	if c.Identity.BaseURL == "" {
 		return fmt.Errorf("IDENTITY_BASE_URL is required")
+	}
+	if c.Session.Store == "redis" && c.Session.RedisURL == "" {
+		return fmt.Errorf("SESSION_REDIS_URL is required when SESSION_STORE=redis")
 	}
 	return nil
 }

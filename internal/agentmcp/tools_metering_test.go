@@ -19,6 +19,7 @@ func TestReportUsageNoMeter(t *testing.T) {
 		Sessions: NewSessionStore(),
 		Metrics:  NewTestMetrics(),
 		Events:   NoopEventPublisher{},
+		Breakers: NewBreakers(config.BreakerConfig{FailureThreshold: 5}),
 		Logger:   testLogger,
 	}
 	rc := &requestContext{deps: deps, request: nil, logger: testLogger}
@@ -49,6 +50,7 @@ func TestReportUsageWithMeter(t *testing.T) {
 		Sessions: NewSessionStore(),
 		Metrics:  NewTestMetrics(),
 		Events:   NoopEventPublisher{},
+		Breakers: NewBreakers(config.BreakerConfig{FailureThreshold: 5}),
 		Logger:   testLogger,
 	}
 
