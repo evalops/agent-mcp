@@ -3,7 +3,6 @@ package agentmcp
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"connectrpc.com/connect"
@@ -56,8 +55,12 @@ func (rc *requestContext) toolCheckAction(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
+	start := time.Now()
 	resp, err := rc.deps.Governance.EvaluateAction(ctx, req)
+	rc.deps.Metrics.DownstreamLatency.WithLabelValues("governance", "evaluate_action").Observe(time.Since(start).Seconds())
 	if err != nil {
+		rc.deps.Metrics.DownstreamErrors.WithLabelValues("governance").Inc()
+		rc.logger.Error("governance evaluation failed", "action_type", input.ActionType, "error", err)
 		return nil, checkActionOutput{}, fmt.Errorf("governance evaluation failed: %w", err)
 	}
 
@@ -72,12 +75,26 @@ func (rc *requestContext) toolCheckAction(
 		MatchedRules: eval.GetMatchedRules(),
 	}
 
+	rc.deps.Metrics.GovernanceChecks.WithLabelValues(decision, riskLevel).Inc()
+	rc.logger.Info("governance check completed",
+		"action_type", input.ActionType,
+		"decision", decision,
+		"risk_level", riskLevel,
+		"agent_id", agentID,
+	)
+
+	// If governance says REQUIRE_APPROVAL, create an approval request.
 	if decision == "require_approval" && rc.deps.Approvals != nil && rc.deps.Config.Approvals.BaseURL != "" {
 		approvalID, err := rc.createApprovalRequest(ctx, state, input.ActionType, input.ActionPayload, eval.GetRiskLevel())
 		if err != nil {
-			log.Printf("approval request creation failed: %v", err)
+			rc.deps.Metrics.DownstreamErrors.WithLabelValues("approvals").Inc()
+			rc.logger.Error("approval request creation failed", "error", err)
 		} else {
 			out.ApprovalID = approvalID
+			rc.deps.Metrics.ApprovalRequests.WithLabelValues(riskLevel).Inc()
+			rc.deps.Events.Publish(workspaceID, "approval_request", approvalID, "created", map[string]any{
+				"agent_id": agentID, "action_type": input.ActionType, "risk_level": riskLevel,
+			})
 		}
 	}
 
@@ -113,7 +130,9 @@ func (rc *requestContext) createApprovalRequest(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
+	start := time.Now()
 	resp, err := rc.deps.Approvals.RequestApproval(ctx, req)
+	rc.deps.Metrics.DownstreamLatency.WithLabelValues("approvals", "request_approval").Observe(time.Since(start).Seconds())
 	if err != nil {
 		return "", err
 	}

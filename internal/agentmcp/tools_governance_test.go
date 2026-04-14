@@ -2,10 +2,17 @@ package agentmcp
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"connectrpc.com/connect"
+	"github.com/evalops/agent-mcp/internal/clients"
 	"github.com/evalops/agent-mcp/internal/config"
+	approvalsv1 "github.com/evalops/proto/gen/go/approvals/v1"
+	"github.com/evalops/proto/gen/go/approvals/v1/approvalsv1connect"
 	governancev1 "github.com/evalops/proto/gen/go/governance/v1"
+	"github.com/evalops/proto/gen/go/governance/v1/governancev1connect"
 )
 
 func TestDecisionString(t *testing.T) {
@@ -19,8 +26,7 @@ func TestDecisionString(t *testing.T) {
 		{governancev1.ActionDecision_ACTION_DECISION_UNSPECIFIED, "allow"},
 	}
 	for _, tt := range tests {
-		got := decisionString(tt.input)
-		if got != tt.want {
+		if got := decisionString(tt.input); got != tt.want {
 			t.Errorf("decisionString(%v) = %s, want %s", tt.input, got, tt.want)
 		}
 	}
@@ -38,8 +44,7 @@ func TestRiskLevelString(t *testing.T) {
 		{governancev1.RiskLevel_RISK_LEVEL_UNSPECIFIED, "low"},
 	}
 	for _, tt := range tests {
-		got := riskLevelString(tt.input)
-		if got != tt.want {
+		if got := riskLevelString(tt.input); got != tt.want {
 			t.Errorf("riskLevelString(%v) = %s, want %s", tt.input, got, tt.want)
 		}
 	}
@@ -49,12 +54,13 @@ func TestCheckActionNoGovernance(t *testing.T) {
 	deps := &Deps{
 		Config:   config.Config{ServiceName: "test", Version: "test"},
 		Sessions: NewSessionStore(),
+		Metrics:  NewTestMetrics(),
+		Events:   NoopEventPublisher{},
+		Logger:   testLogger,
 	}
-	rc := &requestContext{deps: deps, request: nil}
+	rc := &requestContext{deps: deps, request: nil, logger: testLogger}
 
-	_, out, err := rc.toolCheckAction(context.Background(), nil, checkActionInput{
-		ActionType: "Bash",
-	})
+	_, out, err := rc.toolCheckAction(context.Background(), nil, checkActionInput{ActionType: "Bash"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,17 +69,214 @@ func TestCheckActionNoGovernance(t *testing.T) {
 	}
 }
 
+func TestCheckActionWithGovernance(t *testing.T) {
+	mockGov := &mockGovernanceService{
+		decision:  governancev1.ActionDecision_ACTION_DECISION_DENY,
+		riskLevel: governancev1.RiskLevel_RISK_LEVEL_CRITICAL,
+		reasons:   []string{"destructive command"},
+	}
+	_, handler := governancev1connect.NewGovernanceServiceHandler(mockGov)
+	govSrv := httptest.NewServer(handler)
+	defer govSrv.Close()
+
+	deps := &Deps{
+		Config: config.Config{
+			ServiceName: "test", Version: "test",
+			Governance: config.GovernanceConfig{BaseURL: govSrv.URL},
+		},
+		Governance: clients.NewGovernanceClient(govSrv.URL, govSrv.Client()),
+		Sessions:   NewSessionStore(),
+		Metrics:    NewTestMetrics(),
+		Events:     NoopEventPublisher{},
+		Logger:     testLogger,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Mcp-Session-Id", "sess_1")
+	rc := &requestContext{deps: deps, request: req, logger: testLogger}
+
+	_, out, err := rc.toolCheckAction(context.Background(), nil, checkActionInput{
+		ActionType:    "Bash",
+		ActionPayload: "rm -rf /",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Decision != "deny" {
+		t.Fatalf("expected deny, got %s", out.Decision)
+	}
+	if out.RiskLevel != "critical" {
+		t.Fatalf("expected critical, got %s", out.RiskLevel)
+	}
+	if len(out.Reasons) != 1 || out.Reasons[0] != "destructive command" {
+		t.Fatalf("unexpected reasons: %v", out.Reasons)
+	}
+}
+
+func TestCheckActionRequireApproval(t *testing.T) {
+	mockGov := &mockGovernanceService{
+		decision:  governancev1.ActionDecision_ACTION_DECISION_REQUIRE_APPROVAL,
+		riskLevel: governancev1.RiskLevel_RISK_LEVEL_HIGH,
+	}
+	_, govHandler := governancev1connect.NewGovernanceServiceHandler(mockGov)
+	govSrv := httptest.NewServer(govHandler)
+	defer govSrv.Close()
+
+	mockApprovals := &mockApprovalService{approvalID: "apr_test_123"}
+	_, appHandler := approvalsv1connect.NewApprovalServiceHandler(mockApprovals)
+	appSrv := httptest.NewServer(appHandler)
+	defer appSrv.Close()
+
+	deps := &Deps{
+		Config: config.Config{
+			ServiceName: "test", Version: "test",
+			Governance: config.GovernanceConfig{BaseURL: govSrv.URL},
+			Approvals:  config.ApprovalsConfig{BaseURL: appSrv.URL},
+		},
+		Governance: clients.NewGovernanceClient(govSrv.URL, govSrv.Client()),
+		Approvals:  clients.NewApprovalsClient(appSrv.URL, appSrv.Client()),
+		Sessions:   NewSessionStore(),
+		Metrics:    NewTestMetrics(),
+		Events:     NoopEventPublisher{},
+		Logger:     testLogger,
+	}
+
+	// Pre-populate session so approval request has context.
+	deps.Sessions.Set("sess_1", &SessionState{
+		AgentID: "agent_1", AgentToken: "tok_1", WorkspaceID: "ws_1", Surface: "cli",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Mcp-Session-Id", "sess_1")
+	rc := &requestContext{deps: deps, request: req, logger: testLogger}
+
+	_, out, err := rc.toolCheckAction(context.Background(), nil, checkActionInput{
+		ActionType: "Bash", ActionPayload: "delete database",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Decision != "require_approval" {
+		t.Fatalf("expected require_approval, got %s", out.Decision)
+	}
+	if out.ApprovalID != "apr_test_123" {
+		t.Fatalf("expected apr_test_123, got %s", out.ApprovalID)
+	}
+}
+
 func TestCheckApprovalNoApprovals(t *testing.T) {
 	deps := &Deps{
 		Config:   config.Config{ServiceName: "test", Version: "test"},
 		Sessions: NewSessionStore(),
+		Metrics:  NewTestMetrics(),
+		Events:   NoopEventPublisher{},
+		Logger:   testLogger,
 	}
-	rc := &requestContext{deps: deps, request: nil}
+	rc := &requestContext{deps: deps, request: nil, logger: testLogger}
 
-	_, _, err := rc.toolCheckApproval(context.Background(), nil, checkApprovalInput{
-		ApprovalID: "apr_123",
-	})
+	_, _, err := rc.toolCheckApproval(context.Background(), nil, checkApprovalInput{ApprovalID: "apr_123"})
 	if err == nil {
-		t.Fatal("expected error when approvals service not configured")
+		t.Fatal("expected error when approvals not configured")
 	}
+}
+
+func TestCheckApprovalPending(t *testing.T) {
+	mockApprovals := &mockApprovalService{
+		pendingIDs: []string{"apr_123", "apr_456"},
+	}
+	_, handler := approvalsv1connect.NewApprovalServiceHandler(mockApprovals)
+	appSrv := httptest.NewServer(handler)
+	defer appSrv.Close()
+
+	deps := &Deps{
+		Config: config.Config{
+			ServiceName: "test", Version: "test",
+			Approvals: config.ApprovalsConfig{BaseURL: appSrv.URL},
+		},
+		Approvals: clients.NewApprovalsClient(appSrv.URL, appSrv.Client()),
+		Sessions:  NewSessionStore(),
+		Metrics:   NewTestMetrics(),
+		Events:    NoopEventPublisher{},
+		Logger:    testLogger,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	rc := &requestContext{deps: deps, request: req, logger: testLogger}
+
+	_, out, err := rc.toolCheckApproval(context.Background(), nil, checkApprovalInput{ApprovalID: "apr_123"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.State != "pending" {
+		t.Fatalf("expected pending, got %s", out.State)
+	}
+}
+
+func TestCheckApprovalResolved(t *testing.T) {
+	mockApprovals := &mockApprovalService{pendingIDs: []string{"apr_other"}}
+	_, handler := approvalsv1connect.NewApprovalServiceHandler(mockApprovals)
+	appSrv := httptest.NewServer(handler)
+	defer appSrv.Close()
+
+	deps := &Deps{
+		Config: config.Config{
+			ServiceName: "test", Version: "test",
+			Approvals: config.ApprovalsConfig{BaseURL: appSrv.URL},
+		},
+		Approvals: clients.NewApprovalsClient(appSrv.URL, appSrv.Client()),
+		Sessions:  NewSessionStore(),
+		Metrics:   NewTestMetrics(),
+		Events:    NoopEventPublisher{},
+		Logger:    testLogger,
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	rc := &requestContext{deps: deps, request: req, logger: testLogger}
+
+	_, out, err := rc.toolCheckApproval(context.Background(), nil, checkApprovalInput{ApprovalID: "apr_123"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.State != "resolved" {
+		t.Fatalf("expected resolved, got %s", out.State)
+	}
+}
+
+// Mock ConnectRPC services.
+
+type mockGovernanceService struct {
+	governancev1connect.UnimplementedGovernanceServiceHandler
+	decision  governancev1.ActionDecision
+	riskLevel governancev1.RiskLevel
+	reasons   []string
+}
+
+func (m *mockGovernanceService) EvaluateAction(_ context.Context, _ *connect.Request[governancev1.EvaluateActionRequest]) (*connect.Response[governancev1.EvaluateActionResponse], error) {
+	return connect.NewResponse(&governancev1.EvaluateActionResponse{
+		Evaluation: &governancev1.ActionEvaluation{
+			Decision:  m.decision,
+			RiskLevel: m.riskLevel,
+			Reasons:   m.reasons,
+		},
+	}), nil
+}
+
+type mockApprovalService struct {
+	approvalsv1connect.UnimplementedApprovalServiceHandler
+	approvalID string
+	pendingIDs []string
+}
+
+func (m *mockApprovalService) RequestApproval(_ context.Context, _ *connect.Request[approvalsv1.RequestApprovalRequest]) (*connect.Response[approvalsv1.RequestApprovalResponse], error) {
+	return connect.NewResponse(&approvalsv1.RequestApprovalResponse{
+		ApprovalRequest: &approvalsv1.ApprovalRequest{Id: m.approvalID},
+	}), nil
+}
+
+func (m *mockApprovalService) ListPending(_ context.Context, _ *connect.Request[approvalsv1.ListPendingRequest]) (*connect.Response[approvalsv1.ListPendingResponse], error) {
+	reqs := make([]*approvalsv1.ApprovalRequest, 0, len(m.pendingIDs))
+	for _, id := range m.pendingIDs {
+		reqs = append(reqs, &approvalsv1.ApprovalRequest{Id: id})
+	}
+	return connect.NewResponse(&approvalsv1.ListPendingResponse{Requests: reqs}), nil
 }
