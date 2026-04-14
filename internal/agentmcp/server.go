@@ -103,22 +103,22 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_register",
-		Description: "Register this agent with EvalOps — creates identity session and registry presence in one call",
+		Description: "Register this agent with EvalOps \u2014 creates identity session and registry presence in one call. Call this at the start of every session before using any other EvalOps tools",
 	}, rc.toolRegister)
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_heartbeat",
-		Description: "Heartbeat the agent session — rotates identity token and updates registry presence",
+		Description: "Heartbeat the agent session \u2014 rotates identity token and updates registry presence. Call this every 60 seconds to maintain session liveness",
 	}, rc.toolHeartbeat)
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_deregister",
-		Description: "Deregister the agent — revokes identity session and removes registry presence",
+		Description: "Deregister the agent \u2014 revokes identity session and removes registry presence",
 	}, rc.toolDeregister)
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_check_action",
-		Description: "Evaluate an action against governance policies — returns allow, deny, or require_approval with risk level",
+		Description: "Evaluate an action against governance policies \u2014 returns allow, deny, or require_approval with risk level. Call this BEFORE executing any tool that modifies files, runs shell commands, sends messages, or accesses external APIs",
 	}, rc.toolCheckAction)
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
@@ -128,7 +128,7 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_report_usage",
-		Description: "Report token usage and cost to the metering service",
+		Description: "Report token usage and cost to the metering service. Call this after each LLM inference call to enable cost attribution",
 	}, rc.toolReportUsage)
 
 	registerResources(server, deps, sid)
