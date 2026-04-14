@@ -1,0 +1,194 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/evalops/service-runtime/mtls"
+	"github.com/evalops/service-runtime/startup"
+)
+
+type IdentityConfig struct {
+	BaseURL        string
+	IntrospectURL  string
+	RequestTimeout time.Duration
+	CacheTTL       time.Duration
+	TLS            mtls.ClientConfig
+}
+
+type RegistryConfig struct {
+	BaseURL        string
+	RequestTimeout time.Duration
+	TLS            mtls.ClientConfig
+}
+
+type GovernanceConfig struct {
+	BaseURL        string
+	RequestTimeout time.Duration
+	TLS            mtls.ClientConfig
+}
+
+type ApprovalsConfig struct {
+	BaseURL        string
+	RequestTimeout time.Duration
+	PollInterval   time.Duration
+	PollTimeout    time.Duration
+	TLS            mtls.ClientConfig
+}
+
+type MeterConfig struct {
+	BaseURL        string
+	RequestTimeout time.Duration
+	TLS            mtls.ClientConfig
+}
+
+type MemoryConfig struct {
+	BaseURL        string
+	RequestTimeout time.Duration
+	TLS            mtls.ClientConfig
+}
+
+type Config struct {
+	ServiceName  string
+	Environment  string
+	Version      string
+	Addr         string
+	StartupRetry startup.Config
+	TLS          mtls.ServerConfig
+	Identity     IdentityConfig
+	Registry     RegistryConfig
+	Governance   GovernanceConfig
+	Approvals    ApprovalsConfig
+	Meter        MeterConfig
+	Memory       MemoryConfig
+}
+
+func Load() Config {
+	return Config{
+		ServiceName: envOrDefault("SERVICE_NAME", "agent-mcp"),
+		Environment: envOrDefault("ENVIRONMENT", "development"),
+		Version:     envOrDefault("VERSION", "dev"),
+		Addr:        envOrDefault("ADDR", ":8080"),
+		StartupRetry: startup.Config{
+			MaxAttempts: envOrDefaultInt("STARTUP_MAX_ATTEMPTS", startup.DefaultMaxAttempts),
+			Delay:       envOrDefaultDuration("STARTUP_DELAY", startup.DefaultDelay),
+		},
+		TLS: mtls.ServerConfig{
+			CertFile:     trimEnv("TLS_CERT_FILE"),
+			KeyFile:      trimEnv("TLS_KEY_FILE"),
+			ClientCAFile: trimEnv("TLS_CLIENT_CA_FILE"),
+		},
+		Identity: IdentityConfig{
+			BaseURL:        trimEnv("IDENTITY_BASE_URL"),
+			IntrospectURL:  trimEnv("IDENTITY_INTROSPECT_URL"),
+			RequestTimeout: envOrDefaultDuration("IDENTITY_REQUEST_TIMEOUT", 5*time.Second),
+			CacheTTL:       envOrDefaultDuration("IDENTITY_CACHE_TTL", 30*time.Second),
+			TLS: mtls.ClientConfig{
+				CAFile:     trimEnv("IDENTITY_CA_FILE"),
+				CertFile:   trimEnv("IDENTITY_CERT_FILE"),
+				KeyFile:    trimEnv("IDENTITY_KEY_FILE"),
+				ServerName: trimEnv("IDENTITY_SERVER_NAME"),
+			},
+		},
+		Registry: RegistryConfig{
+			BaseURL:        trimEnv("REGISTRY_BASE_URL"),
+			RequestTimeout: envOrDefaultDuration("REGISTRY_REQUEST_TIMEOUT", 5*time.Second),
+			TLS: mtls.ClientConfig{
+				CAFile:     trimEnv("REGISTRY_CA_FILE"),
+				CertFile:   trimEnv("REGISTRY_CERT_FILE"),
+				KeyFile:    trimEnv("REGISTRY_KEY_FILE"),
+				ServerName: trimEnv("REGISTRY_SERVER_NAME"),
+			},
+		},
+		Governance: GovernanceConfig{
+			BaseURL:        trimEnv("GOVERNANCE_BASE_URL"),
+			RequestTimeout: envOrDefaultDuration("GOVERNANCE_REQUEST_TIMEOUT", 5*time.Second),
+			TLS: mtls.ClientConfig{
+				CAFile:     trimEnv("GOVERNANCE_CA_FILE"),
+				CertFile:   trimEnv("GOVERNANCE_CERT_FILE"),
+				KeyFile:    trimEnv("GOVERNANCE_KEY_FILE"),
+				ServerName: trimEnv("GOVERNANCE_SERVER_NAME"),
+			},
+		},
+		Approvals: ApprovalsConfig{
+			BaseURL:        trimEnv("APPROVALS_BASE_URL"),
+			RequestTimeout: envOrDefaultDuration("APPROVALS_REQUEST_TIMEOUT", 5*time.Second),
+			PollInterval:   envOrDefaultDuration("APPROVALS_POLL_INTERVAL", 3*time.Second),
+			PollTimeout:    envOrDefaultDuration("APPROVALS_POLL_TIMEOUT", 5*time.Minute),
+			TLS: mtls.ClientConfig{
+				CAFile:     trimEnv("APPROVALS_CA_FILE"),
+				CertFile:   trimEnv("APPROVALS_CERT_FILE"),
+				KeyFile:    trimEnv("APPROVALS_KEY_FILE"),
+				ServerName: trimEnv("APPROVALS_SERVER_NAME"),
+			},
+		},
+		Meter: MeterConfig{
+			BaseURL:        trimEnv("METER_BASE_URL"),
+			RequestTimeout: envOrDefaultDuration("METER_REQUEST_TIMEOUT", 5*time.Second),
+			TLS: mtls.ClientConfig{
+				CAFile:     trimEnv("METER_CA_FILE"),
+				CertFile:   trimEnv("METER_CERT_FILE"),
+				KeyFile:    trimEnv("METER_KEY_FILE"),
+				ServerName: trimEnv("METER_SERVER_NAME"),
+			},
+		},
+		Memory: MemoryConfig{
+			BaseURL:        trimEnv("MEMORY_BASE_URL"),
+			RequestTimeout: envOrDefaultDuration("MEMORY_REQUEST_TIMEOUT", 5*time.Second),
+			TLS: mtls.ClientConfig{
+				CAFile:     trimEnv("MEMORY_CA_FILE"),
+				CertFile:   trimEnv("MEMORY_CERT_FILE"),
+				KeyFile:    trimEnv("MEMORY_KEY_FILE"),
+				ServerName: trimEnv("MEMORY_SERVER_NAME"),
+			},
+		},
+	}
+}
+
+func (c Config) Validate() error {
+	if c.Addr == "" {
+		return fmt.Errorf("addr is required")
+	}
+	if c.Identity.BaseURL == "" {
+		return fmt.Errorf("IDENTITY_BASE_URL is required")
+	}
+	return nil
+}
+
+func envOrDefault(key, fallback string) string {
+	if v := trimEnv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envOrDefaultInt(key string, fallback int) int {
+	v := trimEnv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func envOrDefaultDuration(key string, fallback time.Duration) time.Duration {
+	v := trimEnv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
+}
+
+func trimEnv(key string) string {
+	return strings.TrimSpace(os.Getenv(key))
+}
