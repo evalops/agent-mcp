@@ -132,9 +132,9 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 
 	cleanup := func(ctx context.Context) {
 		stopReaper()
-		// Redis-backed sessions are shared across replicas, so only local in-memory
-		// sessions should be deregistered during shutdown.
-		if _, sharedStore := sessionStore.(*agentmcp.RedisSessionStore); !sharedStore {
+		// Only deregister from memory store -- Redis sessions expire via TTL
+		// and are shared across replicas.
+		if _, isMemory := sessionStore.(*agentmcp.MemorySessionStore); isMemory {
 			sessions := sessionStore.All()
 			if len(sessions) > 0 {
 				logger.Info("graceful shutdown: deregistering active sessions", "count", len(sessions))
@@ -147,10 +147,10 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 				}
 			}
 		}
+		deps.Events.Close()
 		if err := sessionStore.Close(); err != nil {
 			logger.Warn("session store close failed", "error", err)
 		}
-		deps.Events.Close()
 	}
 
 	return &BuildResult{Handler: handler, Cleanup: cleanup, Deps: deps}, nil
