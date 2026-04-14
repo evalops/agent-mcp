@@ -155,11 +155,21 @@ func (rc *requestContext) createApprovalRequest(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
+	if rc.deps.Breakers != nil && !rc.deps.Breakers.Approvals.Allow() {
+		rc.logger.Warn("approvals circuit breaker open -- failing closed")
+		return "", fmt.Errorf("approvals service unreachable (circuit breaker open)")
+	}
 	start := time.Now()
 	resp, err := rc.deps.Approvals.RequestApproval(ctx, req)
 	rc.deps.Metrics.DownstreamLatency.WithLabelValues("approvals", "request_approval").Observe(time.Since(start).Seconds())
 	if err != nil {
+		if rc.deps.Breakers != nil {
+			rc.deps.Breakers.Approvals.RecordFailure()
+		}
 		return "", err
+	}
+	if rc.deps.Breakers != nil {
+		rc.deps.Breakers.Approvals.RecordSuccess()
 	}
 	return resp.Msg.GetApprovalRequest().GetId(), nil
 }

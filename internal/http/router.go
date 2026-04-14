@@ -143,12 +143,10 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 				}
 			}
 		}
-		deps.Events.Close()
-		if closer, ok := sessionStore.(interface{ Close() error }); ok {
-			if err := closer.Close(); err != nil {
-				logger.Warn("shutdown session store close failed", "error", err)
-			}
+		if err := sessionStore.Close(); err != nil {
+			logger.Warn("session store close failed", "error", err)
 		}
+		deps.Events.Close()
 	}
 
 	return &BuildResult{Handler: handler, Cleanup: cleanup, Deps: deps}, nil

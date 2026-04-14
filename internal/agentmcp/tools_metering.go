@@ -65,12 +65,22 @@ func (rc *requestContext) toolReportUsage(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
+	if rc.deps.Breakers != nil && !rc.deps.Breakers.Meter.Allow() {
+		rc.logger.Warn("meter circuit breaker open -- skipping usage report (fail-open)", "agent_id", agentID, "model", input.Model)
+		return nil, reportUsageOutput{Recorded: false}, nil
+	}
 	start := time.Now()
 	if _, err := rc.deps.Meter.RecordUsage(ctx, req); err != nil {
 		rc.deps.Metrics.DownstreamErrors.WithLabelValues("meter").Inc()
+		if rc.deps.Breakers != nil {
+			rc.deps.Breakers.Meter.RecordFailure()
+		}
 		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
 		rc.logger.Error("meter record usage failed", "error", err)
 		return nil, reportUsageOutput{}, fmt.Errorf("meter record usage failed: %w", err)
+	}
+	if rc.deps.Breakers != nil {
+		rc.deps.Breakers.Meter.RecordSuccess()
 	}
 	rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
 

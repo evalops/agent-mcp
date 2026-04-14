@@ -32,8 +32,14 @@ type Deps struct {
 }
 
 // Breakers holds circuit breakers wired into downstream call paths.
+// Breakers holds circuit breakers for each downstream service.
 type Breakers struct {
+	Identity   *Breaker
+	Registry   *Breaker
 	Governance *Breaker
+	Approvals  *Breaker
+	Meter      *Breaker
+	Memory     *Breaker
 }
 
 func NewBreakers(cfg config.BreakerConfig) *Breakers {
@@ -42,7 +48,12 @@ func NewBreakers(cfg config.BreakerConfig) *Breakers {
 		ResetTimeout:     cfg.ResetTimeout,
 	}
 	return &Breakers{
+		Identity:   NewBreaker(bc),
+		Registry:   NewBreaker(bc),
 		Governance: NewBreaker(bc),
+		Approvals:  NewBreaker(bc),
+		Meter:      NewBreaker(bc),
+		Memory:     NewBreaker(bc),
 	}
 }
 

@@ -28,6 +28,7 @@ type SessionBackend interface {
 	ActiveCount() int
 	All() map[string]*SessionState
 	SweepExpired(now time.Time) int
+	Close() error
 }
 
 // MemorySessionStore is an in-memory session store for local development.
@@ -91,6 +92,11 @@ func (s *MemorySessionStore) SweepExpired(now time.Time) int {
 		}
 	}
 	return removed
+}
+
+// Close is a no-op for the in-memory store.
+func (s *MemorySessionStore) Close() error {
+	return nil
 }
 
 // RunExpiryReaper starts a background goroutine that sweeps expired sessions.
