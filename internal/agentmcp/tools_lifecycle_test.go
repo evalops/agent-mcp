@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -244,8 +245,15 @@ func TestToolHeartbeatWithRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if mockRegistry.heartbeatCalled != 1 {
-		t.Fatalf("expected 1 registry heartbeat call, got %d", mockRegistry.heartbeatCalled)
+	// Registry heartbeat is now fire-and-forget; poll until the background goroutine completes.
+	deadline := time.After(2 * time.Second)
+	for mockRegistry.heartbeatCalled.Load() < 1 {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for background registry heartbeat; called=%d", mockRegistry.heartbeatCalled.Load())
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
 	}
 }
 
@@ -343,7 +351,7 @@ func TestRequestContextMCPSessionID(t *testing.T) {
 type mockAgentService struct {
 	agentsv1connect.UnimplementedAgentServiceHandler
 	registerCalled   int
-	heartbeatCalled  int
+	heartbeatCalled  atomic.Int32 // atomic: called from background goroutine
 	deregisterCalled int
 }
 
@@ -353,7 +361,7 @@ func (m *mockAgentService) Register(_ context.Context, _ *connect.Request[agents
 }
 
 func (m *mockAgentService) Heartbeat(_ context.Context, _ *connect.Request[agentsv1.HeartbeatRequest]) (*connect.Response[agentsv1.HeartbeatResponse], error) {
-	m.heartbeatCalled++
+	m.heartbeatCalled.Add(1)
 	return connect.NewResponse(&agentsv1.HeartbeatResponse{}), nil
 }
 

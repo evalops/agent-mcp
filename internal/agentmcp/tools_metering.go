@@ -2,13 +2,13 @@ package agentmcp
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"connectrpc.com/connect"
 	meterv1 "github.com/evalops/proto/gen/go/meter/v1"
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/protobuf/proto"
 )
 
 type reportUsageInput struct {
@@ -72,20 +72,6 @@ func (rc *requestContext) toolReportUsage(
 		rc.logger.Warn("meter circuit breaker open -- skipping usage report (fail-open)", "agent_id", agentID, "model", input.Model)
 		return nil, reportUsageOutput{Recorded: false}, nil
 	}
-	start := time.Now()
-	if _, err := rc.deps.Meter.RecordUsage(ctx, req); err != nil {
-		rc.deps.Metrics.DownstreamErrors.WithLabelValues("meter").Inc()
-		if rc.deps.Breakers != nil {
-			rc.deps.Breakers.Meter.RecordFailure()
-		}
-		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
-		rc.logger.Error("meter record usage failed", "error", err)
-		return nil, reportUsageOutput{}, fmt.Errorf("meter record usage failed: %w", err)
-	}
-	if rc.deps.Breakers != nil {
-		rc.deps.Breakers.Meter.RecordSuccess()
-	}
-	rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
 
 	rc.deps.Metrics.UsageReports.Inc()
 	rc.deps.Events.Publish(ctx, workspaceID, "usage_report", requestID, "recorded", map[string]any{
@@ -101,6 +87,29 @@ func (rc *requestContext) toolReportUsage(
 		"workspace_id":  workspaceID,
 	})
 	rc.logger.Info("usage reported", "agent_id", agentID, "model", input.Model, "input_tokens", input.InputTokens, "output_tokens", input.OutputTokens)
+
+	// Fire-and-forget: send usage to meter service in background so the agent
+	// doesn't block on downstream metering latency.
+	clonedMsg := proto.Clone(req.Msg).(*meterv1.RecordUsageRequest)
+	go func() {
+		bgStart := time.Now()
+		bgReq := connect.NewRequest(clonedMsg)
+		if agentToken != "" {
+			bgReq.Header().Set("Authorization", "Bearer "+agentToken)
+		}
+		if _, err := rc.deps.Meter.RecordUsage(context.WithoutCancel(ctx), bgReq); err != nil {
+			rc.deps.Metrics.DownstreamErrors.WithLabelValues("meter").Inc()
+			if rc.deps.Breakers != nil {
+				rc.deps.Breakers.Meter.RecordFailure()
+			}
+			rc.logger.Warn("background usage report failed", "error", err)
+		} else {
+			if rc.deps.Breakers != nil {
+				rc.deps.Breakers.Meter.RecordSuccess()
+			}
+		}
+		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(bgStart).Seconds())
+	}()
 
 	return nil, reportUsageOutput{Recorded: true}, nil
 }

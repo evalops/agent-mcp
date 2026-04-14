@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/evalops/agent-mcp/internal/clients"
@@ -72,14 +74,21 @@ func TestReportUsageWithMeter(t *testing.T) {
 	if !out.Recorded {
 		t.Fatal("expected recorded=true")
 	}
-	if mockMeter.recordCalled != 1 {
-		t.Fatalf("expected 1 meter call, got %d", mockMeter.recordCalled)
+	// RecordUsage is now fire-and-forget; poll until the background goroutine completes.
+	deadline := time.After(2 * time.Second)
+	for mockMeter.recordCalled.Load() < 1 {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for background usage report; called=%d", mockMeter.recordCalled.Load())
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
 	}
-	if mockMeter.lastAgentID != "agent_1" {
-		t.Fatalf("expected agent_1, got %s", mockMeter.lastAgentID)
+	if mockMeter.lastAgentID.Load() != "agent_1" {
+		t.Fatalf("expected agent_1, got %s", mockMeter.lastAgentID.Load())
 	}
-	if mockMeter.lastModel != "claude-sonnet-4-6" {
-		t.Fatalf("expected claude-sonnet-4-6, got %s", mockMeter.lastModel)
+	if mockMeter.lastModel.Load() != "claude-sonnet-4-6" {
+		t.Fatalf("expected claude-sonnet-4-6, got %s", mockMeter.lastModel.Load())
 	}
 	recorder := deps.Events.(*recordingEventPublisher)
 	if len(recorder.events) != 1 {
@@ -92,14 +101,14 @@ func TestReportUsageWithMeter(t *testing.T) {
 
 type mockMeterService struct {
 	meterv1connect.UnimplementedMeterServiceHandler
-	recordCalled int
-	lastAgentID  string
-	lastModel    string
+	recordCalled atomic.Int32  // atomic: called from background goroutine
+	lastAgentID  atomic.Value  // atomic: written from background goroutine
+	lastModel    atomic.Value  // atomic: written from background goroutine
 }
 
 func (m *mockMeterService) RecordUsage(_ context.Context, req *connect.Request[meterv1.RecordUsageRequest]) (*connect.Response[meterv1.RecordUsageResponse], error) {
-	m.recordCalled++
-	m.lastAgentID = req.Msg.GetAgentId()
-	m.lastModel = req.Msg.GetModel()
+	m.recordCalled.Add(1)
+	m.lastAgentID.Store(req.Msg.GetAgentId())
+	m.lastModel.Store(req.Msg.GetModel())
 	return connect.NewResponse(&meterv1.RecordUsageResponse{}), nil
 }
