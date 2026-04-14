@@ -2,13 +2,13 @@ package agentmcp
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"connectrpc.com/connect"
 	meterv1 "github.com/evalops/proto/gen/go/meter/v1"
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/protobuf/proto"
 )
 
 type reportUsageInput struct {
@@ -21,7 +21,8 @@ type reportUsageInput struct {
 }
 
 type reportUsageOutput struct {
-	Recorded bool `json:"recorded"`
+	Recorded bool `json:"recorded"` // true means accepted for background recording, not confirmed persisted
+	Async    bool `json:"async"`    // true when metering is fire-and-forget (normal operation)
 }
 
 func (rc *requestContext) toolReportUsage(
@@ -53,7 +54,7 @@ func (rc *requestContext) toolReportUsage(
 	}
 	requestID := uuid.New().String()
 
-	req := connect.NewRequest(&meterv1.RecordUsageRequest{
+	clonedMsg := proto.Clone(&meterv1.RecordUsageRequest{
 		AgentId:      agentID,
 		Surface:      surface,
 		EventType:    eventType,
@@ -63,32 +64,14 @@ func (rc *requestContext) toolReportUsage(
 		OutputTokens: input.OutputTokens,
 		TotalCostUsd: input.CostUSD,
 		RequestId:    requestID,
-	})
-	if agentToken != "" {
-		req.Header().Set("Authorization", "Bearer "+agentToken)
-	}
+	}).(*meterv1.RecordUsageRequest)
 
 	if rc.deps.Breakers != nil && !rc.deps.Breakers.Meter.Allow() {
 		rc.logger.Warn("meter circuit breaker open -- skipping usage report (fail-open)", "agent_id", agentID, "model", input.Model)
 		return nil, reportUsageOutput{Recorded: false}, nil
 	}
-	start := time.Now()
-	if _, err := rc.deps.Meter.RecordUsage(ctx, req); err != nil {
-		rc.deps.Metrics.DownstreamErrors.WithLabelValues("meter").Inc()
-		if rc.deps.Breakers != nil {
-			rc.deps.Breakers.Meter.RecordFailure()
-		}
-		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
-		rc.logger.Error("meter record usage failed", "error", err)
-		return nil, reportUsageOutput{}, fmt.Errorf("meter record usage failed: %w", err)
-	}
-	if rc.deps.Breakers != nil {
-		rc.deps.Breakers.Meter.RecordSuccess()
-	}
-	rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(start).Seconds())
 
-	rc.deps.Metrics.UsageReports.Inc()
-	rc.deps.Events.Publish(ctx, workspaceID, "usage_report", requestID, "recorded", map[string]any{
+	eventAttrs := map[string]any{
 		"agent_id":      agentID,
 		"cost_usd":      input.CostUSD,
 		"event_type":    eventType,
@@ -99,8 +82,35 @@ func (rc *requestContext) toolReportUsage(
 		"request_id":    requestID,
 		"surface":       surface,
 		"workspace_id":  workspaceID,
-	})
+	}
 	rc.logger.Info("usage reported", "agent_id", agentID, "model", input.Model, "input_tokens", input.InputTokens, "output_tokens", input.OutputTokens)
 
-	return nil, reportUsageOutput{Recorded: true}, nil
+	go func() {
+		// Detach from the request cancellation while still bounding the
+		// downstream RPC lifetime.
+		bgCtx, cancel := detachedContextWithTimeout(ctx, rc.deps.Config.Meter.RequestTimeout)
+		defer cancel()
+
+		bgStart := time.Now()
+		bgReq := connect.NewRequest(clonedMsg)
+		if agentToken != "" {
+			bgReq.Header().Set("Authorization", "Bearer "+agentToken)
+		}
+		if _, err := rc.deps.Meter.RecordUsage(bgCtx, bgReq); err != nil {
+			rc.deps.Metrics.DownstreamErrors.WithLabelValues("meter").Inc()
+			if rc.deps.Breakers != nil {
+				rc.deps.Breakers.Meter.RecordFailure()
+			}
+			rc.logger.Warn("background usage report failed", "error", err)
+		} else {
+			if rc.deps.Breakers != nil {
+				rc.deps.Breakers.Meter.RecordSuccess()
+			}
+			rc.deps.Metrics.UsageReports.Inc()
+			rc.deps.Events.Publish(bgCtx, workspaceID, "usage_report", requestID, "recorded", eventAttrs)
+		}
+		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(bgStart).Seconds())
+	}()
+
+	return nil, reportUsageOutput{Recorded: true, Async: true}, nil
 }

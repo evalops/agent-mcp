@@ -10,6 +10,7 @@ import (
 	"github.com/evalops/agent-mcp/internal/clients"
 	agentsv1 "github.com/evalops/proto/gen/go/agents/v1"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/protobuf/proto"
 )
 
 type registerInput struct {
@@ -203,36 +204,6 @@ func (rc *requestContext) toolHeartbeat(
 	state.ExpiresAt = session.ExpiresAt
 	rc.deps.Sessions.Set(sid, state)
 
-	// Heartbeat Registry (best-effort, fail-open).
-	if rc.deps.Registry != nil && rc.deps.Config.Registry.BaseURL != "" {
-		if rc.deps.Breakers != nil && !rc.deps.Breakers.Registry.Allow() {
-			rc.logger.Warn("registry circuit breaker open -- skipping heartbeat (fail-open)", "agent_id", state.AgentID)
-		} else {
-			hbStart := time.Now()
-			hbReq := connect.NewRequest(&agentsv1.HeartbeatRequest{
-				AgentId: state.AgentID,
-				Status:  agentsv1.AgentStatus_AGENT_STATUS_ACTIVE,
-				Surface: state.Surface,
-			})
-			hbReq.Header().Set("Authorization", "Bearer "+session.AgentToken)
-			if state.WorkspaceID != "" {
-				hbReq.Header().Set("X-Workspace-ID", state.WorkspaceID)
-			}
-			if _, err := rc.deps.Registry.Heartbeat(ctx, hbReq); err != nil {
-				rc.deps.Metrics.DownstreamErrors.WithLabelValues("registry").Inc()
-				if rc.deps.Breakers != nil {
-					rc.deps.Breakers.Registry.RecordFailure()
-				}
-				rc.logger.Warn("registry heartbeat failed (non-fatal)", "error", err)
-			} else {
-				if rc.deps.Breakers != nil {
-					rc.deps.Breakers.Registry.RecordSuccess()
-				}
-			}
-			rc.deps.Metrics.DownstreamLatency.WithLabelValues("registry", "heartbeat").Observe(time.Since(hbStart).Seconds())
-		}
-	}
-
 	rc.deps.Metrics.Heartbeats.Inc()
 	rc.deps.Events.Publish(ctx, state.WorkspaceID, "agent", state.AgentID, "heartbeat", map[string]any{
 		"agent_id":     state.AgentID,
@@ -244,6 +215,48 @@ func (rc *requestContext) toolHeartbeat(
 		"workspace_id": state.WorkspaceID,
 	})
 	rc.logger.Info("heartbeat completed", "agent_id", state.AgentID)
+
+	// Heartbeat Registry in background (best-effort, fail-open, fire-and-forget).
+	// Launched after session renewal so the agent doesn't wait on registry latency.
+	if rc.deps.Registry != nil && rc.deps.Config.Registry.BaseURL != "" {
+		if rc.deps.Breakers != nil && !rc.deps.Breakers.Registry.Allow() {
+			rc.logger.Warn("registry circuit breaker open -- skipping heartbeat (fail-open)", "agent_id", state.AgentID)
+		} else {
+			// Clone proto message and capture values before goroutine to prevent races.
+			clonedMsg := proto.Clone(&agentsv1.HeartbeatRequest{
+				AgentId: state.AgentID,
+				Status:  agentsv1.AgentStatus_AGENT_STATUS_ACTIVE,
+				Surface: state.Surface,
+			}).(*agentsv1.HeartbeatRequest)
+			agentToken := session.AgentToken
+			workspaceID := state.WorkspaceID
+			go func() {
+				// Detach from the request cancellation while still bounding the
+				// downstream RPC lifetime.
+				hbCtx, cancel := detachedContextWithTimeout(ctx, rc.deps.Config.Registry.RequestTimeout)
+				defer cancel()
+
+				hbStart := time.Now()
+				hbReq := connect.NewRequest(clonedMsg)
+				hbReq.Header().Set("Authorization", "Bearer "+agentToken)
+				if workspaceID != "" {
+					hbReq.Header().Set("X-Workspace-ID", workspaceID)
+				}
+				if _, err := rc.deps.Registry.Heartbeat(hbCtx, hbReq); err != nil {
+					rc.deps.Metrics.DownstreamErrors.WithLabelValues("registry").Inc()
+					if rc.deps.Breakers != nil {
+						rc.deps.Breakers.Registry.RecordFailure()
+					}
+					rc.logger.Warn("background registry heartbeat failed", "error", err)
+				} else {
+					if rc.deps.Breakers != nil {
+						rc.deps.Breakers.Registry.RecordSuccess()
+					}
+				}
+				rc.deps.Metrics.DownstreamLatency.WithLabelValues("registry", "heartbeat").Observe(time.Since(hbStart).Seconds())
+			}()
+		}
+	}
 
 	return nil, heartbeatOutput{
 		AgentID:   session.AgentID,
