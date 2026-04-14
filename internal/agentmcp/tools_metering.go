@@ -21,7 +21,8 @@ type reportUsageInput struct {
 }
 
 type reportUsageOutput struct {
-	Recorded bool `json:"recorded"`
+	Recorded bool `json:"recorded"` // true means accepted for background recording, not confirmed persisted
+	Async    bool `json:"async"`    // true when metering is fire-and-forget (normal operation)
 }
 
 func (rc *requestContext) toolReportUsage(
@@ -111,5 +112,5 @@ func (rc *requestContext) toolReportUsage(
 		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(bgStart).Seconds())
 	}()
 
-	return nil, reportUsageOutput{Recorded: true}, nil
+	return nil, reportUsageOutput{Recorded: true, Async: true}, nil
 }
