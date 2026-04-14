@@ -1,6 +1,8 @@
 package agentmcp
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -121,5 +123,20 @@ func TestRedisSessionStoreSweepIsNoop(t *testing.T) {
 	removed := store.SweepExpired(time.Now())
 	if removed != 0 {
 		t.Fatal("sweep should be noop for redis store")
+	}
+}
+
+func TestRedisSessionStoreClose(t *testing.T) {
+	client, _ := newTestRedis(t)
+
+	store := NewRedisSessionStore(client, time.Hour)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close returned error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := client.Ping(ctx).Err(); !errors.Is(err, redis.ErrClosed) {
+		t.Fatalf("expected closed client error, got %v", err)
 	}
 }

@@ -144,6 +144,11 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 			}
 		}
 		deps.Events.Close()
+		if closer, ok := sessionStore.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				logger.Warn("shutdown session store close failed", "error", err)
+			}
+		}
 	}
 
 	return &BuildResult{Handler: handler, Cleanup: cleanup, Deps: deps}, nil
@@ -151,13 +156,26 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 
 // addHTTPHealthCheck adds a health check that GETs /healthz on the given base URL.
 func addHTTPHealthCheck(checker *health.Checker, name, baseURL string, httpClient *http.Client) {
-	parsed, err := url.Parse(baseURL)
+	if httpClient == nil {
+		return
+	}
+	healthURL, err := url.JoinPath(baseURL, "healthz")
 	if err != nil {
 		return
 	}
-	addr := parsed.Host
-	if addr == "" {
-		return
-	}
-	checker.Add(name, health.TCPCheck(addr))
+	checker.Add(name, func(ctx context.Context) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("healthz returned %s", resp.Status)
+		}
+		return nil
+	})
 }

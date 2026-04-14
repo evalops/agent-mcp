@@ -103,3 +103,7 @@ func (s *RedisSessionStore) All() map[string]*SessionState {
 func (s *RedisSessionStore) SweepExpired(_ time.Time) int {
 	return 0
 }
+
+func (s *RedisSessionStore) Close() error {
+	return s.client.Close()
+}

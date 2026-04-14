@@ -68,6 +68,23 @@ func TestBreakerTransitionsToHalfOpen(t *testing.T) {
 	}
 }
 
+func TestBreakerStateDoesNotConsumeHalfOpenProbe(t *testing.T) {
+	b := NewBreaker(BreakerConfig{FailureThreshold: 1, ResetTimeout: 10 * time.Millisecond})
+
+	b.RecordFailure()
+	time.Sleep(20 * time.Millisecond)
+
+	if b.State() != BreakerOpen {
+		t.Fatalf("expected open before probe, got %s", b.State())
+	}
+	if !b.Allow() {
+		t.Fatal("expected first probe after timeout to be allowed")
+	}
+	if b.State() != BreakerHalfOpen {
+		t.Fatalf("expected half_open after probe, got %s", b.State())
+	}
+}
+
 func TestBreakerHalfOpenSuccess(t *testing.T) {
 	b := NewBreaker(BreakerConfig{FailureThreshold: 1, ResetTimeout: 10 * time.Millisecond})
 

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/evalops/agent-mcp/internal/config"
 )
@@ -25,6 +25,10 @@ func TestBuildRouterValidation(t *testing.T) {
 func TestHealthEndpoints(t *testing.T) {
 	// Use a fake identity server for the health check.
 	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer identitySrv.Close()
@@ -32,7 +36,7 @@ func TestHealthEndpoints(t *testing.T) {
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
-		Version: "test", SessionReapInterval: 30 * time.Second,
+		Version:     "test", SessionReapInterval: 30 * time.Second,
 		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
 			BaseURL: identitySrv.URL,
@@ -63,11 +67,11 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestReadyzFailsWhenIdentityDown(t *testing.T) {
-	// Use a port nothing listens on — TCPCheck will fail to connect.
+	// Use a port nothing listens on so the health check request fails to connect.
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
-		Version: "test", SessionReapInterval: 30 * time.Second,
+		Version:     "test", SessionReapInterval: 30 * time.Second,
 		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
 			BaseURL: "http://127.0.0.1:19999",
@@ -87,8 +91,45 @@ func TestReadyzFailsWhenIdentityDown(t *testing.T) {
 	}
 }
 
+func TestReadyzFailsWhenIdentityHealthzReturnsError(t *testing.T) {
+	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer identitySrv.Close()
+
+	cfg := config.Config{
+		ServiceName: "test",
+		Addr:        ":8080",
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
+		Identity: config.IdentityConfig{
+			BaseURL: identitySrv.URL,
+		},
+	}
+	result, err := BuildRouter(context.Background(), cfg, testLogger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer result.Cleanup(nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	result.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when /healthz returns 500, got %d", rec.Code)
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer identitySrv.Close()
@@ -96,7 +137,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
-		Version: "test", SessionReapInterval: 30 * time.Second,
+		Version:     "test", SessionReapInterval: 30 * time.Second,
 		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
 		Identity: config.IdentityConfig{
 			BaseURL: identitySrv.URL,
@@ -118,6 +159,10 @@ func TestMetricsEndpoint(t *testing.T) {
 
 func TestOptionalServicesWiring(t *testing.T) {
 	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer identitySrv.Close()
@@ -125,14 +170,14 @@ func TestOptionalServicesWiring(t *testing.T) {
 	cfg := config.Config{
 		ServiceName: "test",
 		Addr:        ":8080",
-		Version: "test", SessionReapInterval: 30 * time.Second,
-		Breaker: config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
-		Identity:    config.IdentityConfig{BaseURL: identitySrv.URL},
-		Registry:    config.RegistryConfig{BaseURL: "http://registry:8080"},
-		Governance:  config.GovernanceConfig{BaseURL: "http://governance:8080"},
-		Approvals:   config.ApprovalsConfig{BaseURL: "http://approvals:8080"},
-		Meter:       config.MeterConfig{BaseURL: "http://meter:8080"},
-		Memory:      config.MemoryConfig{BaseURL: "http://memory:8080"},
+		Version:     "test", SessionReapInterval: 30 * time.Second,
+		Breaker:    config.BreakerConfig{FailureThreshold: 5, ResetTimeout: 30 * time.Second},
+		Identity:   config.IdentityConfig{BaseURL: identitySrv.URL},
+		Registry:   config.RegistryConfig{BaseURL: "http://registry:8080"},
+		Governance: config.GovernanceConfig{BaseURL: "http://governance:8080"},
+		Approvals:  config.ApprovalsConfig{BaseURL: "http://approvals:8080"},
+		Meter:      config.MeterConfig{BaseURL: "http://meter:8080"},
+		Memory:     config.MemoryConfig{BaseURL: "http://memory:8080"},
 	}
 	result, err := BuildRouter(context.Background(), cfg, testLogger)
 	if err != nil {

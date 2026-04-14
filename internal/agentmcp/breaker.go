@@ -93,10 +93,6 @@ func (b *Breaker) RecordFailure() {
 func (b *Breaker) State() BreakerState {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// Check for auto-transition from open to half-open.
-	if b.state == BreakerOpen && time.Since(b.lastFailure) > b.resetTimeout {
-		b.state = BreakerHalfOpen
-	}
 	return b.state
 }
 
