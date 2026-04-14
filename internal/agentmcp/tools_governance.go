@@ -218,25 +218,25 @@ func (rc *requestContext) checkApprovalOnce(
 	ctx context.Context,
 	approvalID, workspaceID, agentToken string,
 ) (*mcpsdk.CallToolResult, checkApprovalOutput, error) {
-	req := connect.NewRequest(&approvalsv1.ListPendingRequest{
-		WorkspaceId: workspaceID,
+	req := connect.NewRequest(&approvalsv1.GetApprovalRequest{
+		ApprovalRequestId: approvalID,
+		WorkspaceId:       workspaceID,
 	})
 	if agentToken != "" {
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
-	resp, err := rc.deps.Approvals.ListPending(ctx, req)
+	resp, err := rc.deps.Approvals.GetApproval(ctx, req)
 	if err != nil {
-		return nil, checkApprovalOutput{}, fmt.Errorf("list pending approvals failed: %w", err)
+		return nil, checkApprovalOutput{}, fmt.Errorf("get approval failed: %w", err)
 	}
 
-	for _, r := range resp.Msg.GetRequests() {
-		if r.GetId() == approvalID {
-			return nil, checkApprovalOutput{ApprovalID: approvalID, State: "pending"}, nil
-		}
+	state := resp.Msg.GetState()
+	if state == "" {
+		state = "resolved"
 	}
 
-	return nil, checkApprovalOutput{ApprovalID: approvalID, State: "resolved"}, nil
+	return nil, checkApprovalOutput{ApprovalID: approvalID, State: state}, nil
 }
 
 func decisionString(d governancev1.ActionDecision) string {
