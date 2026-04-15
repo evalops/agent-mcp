@@ -14,9 +14,6 @@ updates:
       evalops-internal:
         patterns:
           - "github.com/evalops/*"
-        update-types:
-          - minor
-          - patch
   - package-ecosystem: github-actions
     directory: /
     schedule:
