@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep "\.go$" || true)
+[ -z "$STAGED" ] && exit 0
+echo "Pre-commit: linting staged Go files..."
+STASH_NAME="pre-commit-$(date +%s)"
+git stash push -q --keep-index -m "$STASH_NAME"
+STASHED=$?
+RESULT=0
+if command -v golangci-lint &>/dev/null; then
+  golangci-lint run --new-from-rev=HEAD ./... || RESULT=$?
+fi
+if [ $RESULT -eq 0 ]; then
+  go test -race -count=1 ./... || RESULT=$?
+fi
+[ $STASHED -eq 0 ] && git stash pop -q 2>/dev/null || true
+[ $RESULT -ne 0 ] && echo "Pre-commit: FAILED"
+exit $RESULT
