@@ -10,30 +10,43 @@ if [ ${#staged_go_files[@]} -eq 0 ]; then
   exit 0
 fi
 
-stashed=0
+STASHED=0
 cleanup() {
-  if [ "$stashed" -eq 1 ]; then
+  if [ "$STASHED" -eq 1 ]; then
     git stash pop -q >/dev/null 2>&1 || true
+    STASHED=0
   fi
 }
 trap cleanup EXIT
 
 if ! git diff --quiet -- . || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-  git stash push -q --keep-index --include-untracked -m "pre-commit-$(date +%s)"
-  stashed=1
+  if git stash push -q --keep-index --include-untracked -m "pre-commit-$(date +%s)"; then
+    STASHED=1
+  fi
 fi
 
 echo "Running gofmt on staged files..."
 gofmt -w "${staged_go_files[@]}"
 git add -- "${staged_go_files[@]}"
 
-if [ -f .golangci.yml ]; then
-  echo "Running golangci-lint..."
-  golangci-lint run ./...
-else
-  echo "Running go vet..."
-  go vet ./...
+RESULT=0
+lint_args=(./...)
+
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  lint_args=(--new-from-rev=HEAD ./...)
 fi
 
-echo "Running go test..."
-go test ./...
+if [ -f .golangci.yml ] || [ -f .golangci.yaml ] || [ -f .golangci.toml ] || [ -f .golangci.json ]; then
+  echo "Running golangci-lint..."
+  golangci-lint run "${lint_args[@]}" || RESULT=$?
+else
+  echo "Running go vet..."
+  go vet ./... || RESULT=$?
+fi
+
+if [ $RESULT -eq 0 ]; then
+  echo "Running go test..."
+  go test -count=1 ./... || RESULT=$?
+fi
+
+exit $RESULT
