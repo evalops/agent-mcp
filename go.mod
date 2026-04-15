@@ -6,7 +6,7 @@ require (
 	connectrpc.com/connect v1.19.1
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/evalops/proto v0.0.0-20260414193513-3db7075bd55b
-	github.com/evalops/service-runtime v0.1.37
+	github.com/evalops/service-runtime v0.1.42
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/prometheus/client_golang v1.23.2
