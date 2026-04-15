@@ -26,6 +26,7 @@ type Deps struct {
 	Memory     memoryv1connect.MemoryServiceClient
 	Config     config.Config
 	Sessions   SessionBackend
+	HabitCache *ApprovalHabitsCache
 	Metrics    *Metrics
 	Events     EventPublisher
 	Logger     *slog.Logger

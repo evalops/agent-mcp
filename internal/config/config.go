@@ -44,6 +44,9 @@ type ApprovalsConfig struct {
 	RequestTimeout time.Duration
 	PollInterval   time.Duration
 	PollTimeout    time.Duration
+	EventStream    string
+	EventSubject   string
+	EventDurable   string
 	TLS            mtls.ClientConfig
 }
 
@@ -155,6 +158,9 @@ func Load() Config {
 			RequestTimeout: envOrDefaultDuration("APPROVALS_REQUEST_TIMEOUT", 5*time.Second),
 			PollInterval:   envOrDefaultDuration("APPROVALS_POLL_INTERVAL", 3*time.Second),
 			PollTimeout:    envOrDefaultDuration("APPROVALS_POLL_TIMEOUT", 5*time.Minute),
+			EventStream:    envOrDefault("APPROVALS_EVENT_STREAM", "approvals_events"),
+			EventSubject:   envOrDefault("APPROVALS_EVENT_SUBJECT", "approvals.events.approval_habit.*"),
+			EventDurable:   envOrDefault("APPROVALS_EVENT_DURABLE", "agent-mcp-approval-habits"),
 			TLS: mtls.ClientConfig{
 				CAFile:     trimEnv("APPROVALS_CA_FILE"),
 				CertFile:   trimEnv("APPROVALS_CERT_FILE"),
