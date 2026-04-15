@@ -138,6 +138,16 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 		Description: "Report token usage and cost to the metering service. Call this after each LLM inference call to enable cost attribution",
 	}, rc.toolReportUsage)
 
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "evalops_create_api_key",
+		Description: "Create a new API key for headless authentication such as CI/CD pipelines and automation",
+	}, rc.toolCreateAPIKey)
+
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "evalops_list_api_keys",
+		Description: "List your API keys with names, prefixes, scopes, and usage timestamps",
+	}, rc.toolListAPIKeys)
+
 	registerResources(server, deps, sid)
 
 	logger.Info("mcp server created")

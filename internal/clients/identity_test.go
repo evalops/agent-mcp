@@ -134,7 +134,9 @@ func TestFederateAgent(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(expected)
+		if err := json.NewEncoder(w).Encode(expected); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -319,5 +321,108 @@ func TestIntrospectTokenFallsBackToJWTAudience(t *testing.T) {
 	}
 	if len(introspection.Audience) != 1 || introspection.Audience[0] != "https://mcp.evalops.dev" {
 		t.Fatalf("expected JWT audience fallback, got %v", introspection.Audience)
+	}
+}
+
+func TestCreateAPIKey(t *testing.T) {
+	expiresAt := time.Date(2027, 4, 15, 12, 0, 0, 0, time.UTC)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/api-keys" {
+			t.Fatalf("expected /v1/api-keys, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer user_tok" {
+			t.Fatalf("expected bearer user_tok, got %s", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("expected application/json, got %s", r.Header.Get("Content-Type"))
+		}
+
+		var req CreateAPIKeyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Name != "github-actions-prod" {
+			t.Fatalf("expected github-actions-prod, got %s", req.Name)
+		}
+		if len(req.Scopes) != 1 || req.Scopes[0] != "agent:register" {
+			t.Fatalf("unexpected scopes %#v", req.Scopes)
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		if err := json.NewEncoder(w).Encode(CreateAPIKeyResponse{
+			APIKey: "pk_live_abc123",
+			Key: APIKey{
+				ID:             "key_123",
+				OrganizationID: "org_123",
+				Name:           req.Name,
+				Prefix:         "pk_live_a",
+				Scopes:         []string{"agent:register"},
+				CreatedAt:      time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+				ExpiresAt:      &expiresAt,
+			},
+			ScopesGranted: []string{"agent:register"},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewIdentityClient(srv.URL, srv.Client(), 5*time.Second)
+	resp, err := client.CreateAPIKey(context.Background(), "user_tok", CreateAPIKeyRequest{
+		Name:      "github-actions-prod",
+		Scopes:    []string{"agent:register"},
+		ExpiresAt: &expiresAt,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.APIKey != "pk_live_abc123" {
+		t.Fatalf("expected pk_live_abc123, got %s", resp.APIKey)
+	}
+	if resp.Key.ID != "key_123" {
+		t.Fatalf("expected key_123, got %s", resp.Key.ID)
+	}
+}
+
+func TestListAPIKeys(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/api-keys" {
+			t.Fatalf("expected /v1/api-keys, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer user_tok" {
+			t.Fatalf("expected bearer user_tok, got %s", r.Header.Get("Authorization"))
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"api_keys": []APIKey{
+				{
+					ID:        "key_123",
+					Name:      "github-actions-prod",
+					Prefix:    "pk_live_a",
+					Scopes:    []string{"agent:register"},
+					CreatedAt: time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+				},
+			},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewIdentityClient(srv.URL, srv.Client(), 5*time.Second)
+	keys, err := client.ListAPIKeys(context.Background(), "user_tok")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected one key, got %#v", keys)
+	}
+	if keys[0].ID != "key_123" {
+		t.Fatalf("expected key_123, got %s", keys[0].ID)
 	}
 }

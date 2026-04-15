@@ -79,6 +79,34 @@ type TokenIntrospection struct {
 	Error          string    `json:"error,omitempty"`
 }
 
+type CreateAPIKeyRequest struct {
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Name      string     `json:"name"`
+	Scopes    []string   `json:"scopes,omitempty"`
+}
+
+type APIKey struct {
+	ID             string     `json:"id"`
+	OrganizationID string     `json:"organization_id"`
+	Name           string     `json:"name"`
+	Prefix         string     `json:"prefix"`
+	Role           string     `json:"role"`
+	Provider       string     `json:"provider,omitempty"`
+	Label          string     `json:"label,omitempty"`
+	Scopes         []string   `json:"scopes"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt     *time.Time `json:"last_used_at,omitempty"`
+}
+
+type CreateAPIKeyResponse struct {
+	APIKey          string   `json:"api_key"`
+	Key             APIKey   `json:"key"`
+	ScopesDenied    []string `json:"scopes_denied,omitempty"`
+	ScopesGranted   []string `json:"scopes_granted,omitempty"`
+	ScopesRequested []string `json:"scopes_requested,omitempty"`
+}
+
 func NewIdentityClient(baseURL string, httpClient *http.Client, timeout time.Duration) *IdentityClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -204,6 +232,67 @@ func (c *IdentityClient) IntrospectToken(ctx context.Context, token string) (Tok
 		result.Audience = decodeJWTAudience(token)
 	}
 	return result, nil
+}
+
+func (c *IdentityClient) CreateAPIKey(ctx context.Context, userToken string, req CreateAPIKeyRequest) (CreateAPIKeyResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return CreateAPIKeyResponse{}, fmt.Errorf("marshal api key request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/api-keys", bytes.NewReader(body))
+	if err != nil {
+		return CreateAPIKeyResponse{}, fmt.Errorf("build api key request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return CreateAPIKeyResponse{}, fmt.Errorf("create api key: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode >= 400 {
+		return CreateAPIKeyResponse{}, readErrorResponse(resp)
+	}
+	var created CreateAPIKeyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return CreateAPIKeyResponse{}, fmt.Errorf("decode create api key response: %w", err)
+	}
+	return created, nil
+}
+
+func (c *IdentityClient) ListAPIKeys(ctx context.Context, userToken string) ([]APIKey, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/api-keys", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build list api keys request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("list api keys: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode >= 400 {
+		return nil, readErrorResponse(resp)
+	}
+	var payload struct {
+		APIKeys []APIKey `json:"api_keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode list api keys response: %w", err)
+	}
+	return payload.APIKeys, nil
 }
 
 func (c *IdentityClient) doAgentSessionRequest(req *http.Request) (AgentSession, error) {
