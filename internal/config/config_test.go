@@ -62,7 +62,6 @@ func TestValidateRequiresIdentity(t *testing.T) {
 	}
 
 	t.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
-	t.Setenv("MCP_RESOURCE_URL", "https://mcp.evalops.dev")
 
 	cfg = Load()
 	err = cfg.Validate()
@@ -71,19 +70,8 @@ func TestValidateRequiresIdentity(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresProtectedResourceURL(t *testing.T) {
-	t.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
-
-	cfg := Load()
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for missing MCP_RESOURCE_URL")
-	}
-}
-
 func TestValidateRequiresRedisURLForRedisSessionStore(t *testing.T) {
 	t.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
-	t.Setenv("MCP_RESOURCE_URL", "https://mcp.evalops.dev")
 	t.Setenv("SESSION_STORE", "redis")
 
 	cfg := Load()
@@ -95,7 +83,6 @@ func TestValidateRequiresRedisURLForRedisSessionStore(t *testing.T) {
 
 func TestValidateRejectsUnknownSessionStore(t *testing.T) {
 	t.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
-	t.Setenv("MCP_RESOURCE_URL", "https://mcp.evalops.dev")
 	t.Setenv("SESSION_STORE", "sqlite")
 
 	cfg := Load()
