@@ -6,9 +6,10 @@ require (
 	connectrpc.com/connect v1.19.1
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/evalops/proto v0.0.0-20260414193513-3db7075bd55b
-	github.com/evalops/service-runtime v0.1.42
+	github.com/evalops/service-runtime v0.1.45-0.20260415082800-4de81511447f
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
+	github.com/nats-io/nats.go v1.50.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/redis/go-redis/v9 v9.18.0
@@ -26,7 +27,6 @@ require (
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/nats.go v1.50.0 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/prometheus/common v0.66.1 // indirect

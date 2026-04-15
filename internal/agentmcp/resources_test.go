@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/evalops/agent-mcp/internal/config"
+	approvalsv1 "github.com/evalops/proto/gen/go/approvals/v1"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -100,6 +101,47 @@ func TestReadApprovalHabitsNoService(t *testing.T) {
 	json.Unmarshal([]byte(result.Contents[0].Text), &data)
 	if data["available"] != false {
 		t.Fatal("expected available=false")
+	}
+}
+
+func TestReadApprovalHabitsUsesCache(t *testing.T) {
+	deps := &Deps{
+		Sessions:   NewSessionStore(),
+		HabitCache: NewApprovalHabitsCache(),
+		Config: config.Config{
+			Approvals: config.ApprovalsConfig{BaseURL: "http://approvals.example.com"},
+		},
+	}
+	deps.Sessions.Set("sess_1", &SessionState{WorkspaceID: "ws_1"})
+	deps.HabitCache.Store("ws_1", []*approvalsv1.ApprovalHabit{{
+		Pattern:               "chat:crm_update",
+		ObservationCount:      5,
+		ApprovedCount:         4,
+		AutoApproveConfidence: 0.8,
+	}})
+
+	result, err := readApprovalHabits(nil, deps, "sess_1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal([]byte(result.Contents[0].Text), &data); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if data["available"] != true {
+		t.Fatal("expected available=true")
+	}
+	habits, ok := data["habits"].([]any)
+	if !ok || len(habits) != 1 {
+		t.Fatalf("expected one cached habit, got %#v", data["habits"])
+	}
+	item, ok := habits[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected habit object, got %#v", habits[0])
+	}
+	if item["approved_count"] != float64(4) {
+		t.Fatalf("expected approved_count 4, got %#v", item["approved_count"])
 	}
 }
 

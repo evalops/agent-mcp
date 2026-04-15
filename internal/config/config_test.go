@@ -23,6 +23,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.NATS.Subject != "agent-mcp.events" {
 		t.Fatalf("expected default nats subject agent-mcp.events, got %s", cfg.NATS.Subject)
 	}
+	if cfg.Approvals.EventStream != "approvals_events" {
+		t.Fatalf("expected default approvals event stream approvals_events, got %s", cfg.Approvals.EventStream)
+	}
+	if cfg.Approvals.EventSubject != "approvals.events.approval_habit.*" {
+		t.Fatalf("expected default approvals event subject, got %s", cfg.Approvals.EventSubject)
+	}
+	if cfg.Approvals.EventDurable != "agent-mcp-approval-habits" {
+		t.Fatalf("expected default approvals event durable, got %s", cfg.Approvals.EventDurable)
+	}
 }
 
 func TestLoadFromEnv(t *testing.T) {
@@ -92,6 +101,9 @@ func TestLoadNATSFromEnv(t *testing.T) {
 	t.Setenv("NATS_URL", "nats://nats:4222")
 	t.Setenv("NATS_STREAM", "shared_events")
 	t.Setenv("NATS_SUBJECT_PREFIX", "shared.events")
+	t.Setenv("APPROVALS_EVENT_STREAM", "approval_events")
+	t.Setenv("APPROVALS_EVENT_SUBJECT", "approvals.events.approval_habit.habit-learned")
+	t.Setenv("APPROVALS_EVENT_DURABLE", "agent-mcp-approval-habits-test")
 
 	cfg := Load()
 	if cfg.NATS.URL != "nats://nats:4222" {
@@ -102,6 +114,15 @@ func TestLoadNATSFromEnv(t *testing.T) {
 	}
 	if cfg.NATS.Subject != "shared.events" {
 		t.Fatalf("expected nats subject shared.events, got %q", cfg.NATS.Subject)
+	}
+	if cfg.Approvals.EventStream != "approval_events" {
+		t.Fatalf("expected approvals event stream approval_events, got %q", cfg.Approvals.EventStream)
+	}
+	if cfg.Approvals.EventSubject != "approvals.events.approval_habit.habit-learned" {
+		t.Fatalf("expected approvals event subject from env, got %q", cfg.Approvals.EventSubject)
+	}
+	if cfg.Approvals.EventDurable != "agent-mcp-approval-habits-test" {
+		t.Fatalf("expected approvals event durable from env, got %q", cfg.Approvals.EventDurable)
 	}
 }
 

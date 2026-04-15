@@ -89,13 +89,14 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 	}
 
 	deps := &agentmcp.Deps{
-		Identity: identityClient,
-		Config:   cfg,
-		Sessions: sessionStore,
-		Metrics:  agentmcp.NewMetrics(),
-		Events:   eventPublisher,
-		Logger:   logger,
-		Breakers: agentmcp.NewBreakers(cfg.Breaker),
+		Identity:   identityClient,
+		Config:     cfg,
+		Sessions:   sessionStore,
+		HabitCache: agentmcp.NewApprovalHabitsCache(),
+		Metrics:    agentmcp.NewMetrics(),
+		Events:     eventPublisher,
+		Logger:     logger,
+		Breakers:   agentmcp.NewBreakers(cfg.Breaker),
 	}
 
 	if cfg.Registry.BaseURL != "" {
@@ -116,6 +117,24 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 
 	// Start session expiry reaper (no-op for Redis which uses TTL).
 	stopReaper := agentmcp.RunExpiryReaper(sessionStore, cfg.SessionReapInterval, logger)
+	stopHabitSubscriber := func(context.Context) error { return nil }
+	if cfg.NATS.URL != "" {
+		stop, err := agentmcp.StartApprovalHabitSubscriber(
+			ctx,
+			cfg.NATS.URL,
+			cfg.Approvals.EventStream,
+			cfg.Approvals.EventSubject,
+			cfg.Approvals.EventDurable,
+			deps.HabitCache,
+			logger.With("subscriber", "approval_habits"),
+		)
+		if err != nil {
+			_ = sessionStore.Close()
+			deps.Events.Close()
+			return nil, fmt.Errorf("start approval habit subscriber: %w", err)
+		}
+		stopHabitSubscriber = stop
+	}
 
 	// Health checker: verify all configured downstream services.
 	checker := health.New()
@@ -146,6 +165,9 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 
 	cleanup := func(ctx context.Context) {
 		stopReaper()
+		if err := stopHabitSubscriber(ctx); err != nil {
+			logger.Warn("approval habit subscriber close failed", "error", err)
+		}
 		// Deregister sessions owned by this instance. For Redis-backed stores,
 		// only deregister sessions this process created (LocalSessions), not
 		// every session across all replicas. For in-memory stores, All() is

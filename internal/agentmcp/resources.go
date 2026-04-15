@@ -154,19 +154,23 @@ func readHookRequirements(deps *Deps, sessionID string) (*mcpsdk.ReadResourceRes
 }
 
 func readApprovalHabits(ctx context.Context, deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, error) {
-	if deps.Approvals == nil || deps.Config.Approvals.BaseURL == "" {
-		return jsonResource("evalops://agent/habits", map[string]any{
-			"available": false,
-			"message":   "approvals service not configured",
-		})
-	}
-
 	state, _ := deps.Sessions.Get(sessionID)
 	workspaceID := ""
 	agentToken := ""
 	if state != nil {
 		workspaceID = state.WorkspaceID
 		agentToken = state.AgentToken
+	}
+	if workspaceID != "" && deps.HabitCache != nil {
+		if habits, ok := deps.HabitCache.Get(workspaceID); ok {
+			return approvalHabitsResource(habits)
+		}
+	}
+	if deps.Approvals == nil || deps.Config.Approvals.BaseURL == "" {
+		return jsonResource("evalops://agent/habits", map[string]any{
+			"available": false,
+			"message":   "approvals service not configured",
+		})
 	}
 
 	req := connect.NewRequest(&approvalsv1.GetHabitsRequest{
@@ -191,19 +195,27 @@ func readApprovalHabits(ctx context.Context, deps *Deps, sessionID string) (*mcp
 			"message":   "approvals service unavailable",
 		})
 	}
+	if workspaceID != "" && deps.HabitCache != nil {
+		deps.HabitCache.Store(workspaceID, resp.Msg.GetHabits())
+	}
 
-	habits := make([]map[string]any, 0, len(resp.Msg.GetHabits()))
-	for _, h := range resp.Msg.GetHabits() {
-		habits = append(habits, map[string]any{
+	return approvalHabitsResource(resp.Msg.GetHabits())
+}
+
+func approvalHabitsResource(habits []*approvalsv1.ApprovalHabit) (*mcpsdk.ReadResourceResult, error) {
+	items := make([]map[string]any, 0, len(habits))
+	for _, h := range habits {
+		items = append(items, map[string]any{
 			"pattern":                 h.GetPattern(),
 			"observation_count":       h.GetObservationCount(),
+			"approved_count":          h.GetApprovedCount(),
 			"auto_approve_confidence": h.GetAutoApproveConfidence(),
 		})
 	}
 
 	return jsonResource("evalops://agent/habits", map[string]any{
 		"available": true,
-		"habits":    habits,
+		"habits":    items,
 	})
 }
 
