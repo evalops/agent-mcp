@@ -405,7 +405,7 @@ func TestToolHeartbeatBackgroundRegistryCallUsesConfiguredTimeout(t *testing.T) 
 		if err := json.NewEncoder(w).Encode(clients.AgentSession{
 			AgentID: "agent_test", AgentToken: "tok_rotated", ExpiresAt: time.Now().Add(time.Hour),
 		}); err != nil {
-			t.Fatalf("encode heartbeat response: %v", err)
+			t.Errorf("encode heartbeat response: %v", err)
 		}
 	}))
 	defer srv.Close()
