@@ -62,11 +62,13 @@ func (s *RedisSessionStore) Set(sessionID string, state *SessionState) {
 		}
 	}
 
-	existed := s.client.Exists(ctx, sessionKeyPrefix+sessionID).Val() > 0
+	existedCmd := s.client.Exists(ctx, sessionKeyPrefix+sessionID)
+	existed, err := existedCmd.Result()
 	s.client.Set(ctx, sessionKeyPrefix+sessionID, data, ttl)
 	// Only claim local ownership for new sessions. Heartbeats routed
-	// to a different replica must not claim the session.
-	if !existed {
+	// to a different replica must not claim the session. If Redis cannot
+	// confirm existence, fail closed and skip local ownership tracking.
+	if err == nil && existed == 0 {
 		s.local.Store(sessionID, struct{}{})
 	}
 }

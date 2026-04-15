@@ -10,6 +10,25 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+type existsErrorHook struct{}
+
+func (existsErrorHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (existsErrorHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == "exists" {
+			return errors.New("exists failed")
+		}
+		return next(ctx, cmd)
+	}
+}
+
+func (existsErrorHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
 func newTestRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -231,4 +250,25 @@ func TestRedisSessionStoreUpdateDoesNotClaimLocalOwnership(t *testing.T) {
 	if len(storeB.LocalSessions()) != 0 {
 		t.Fatalf("expected storeB to keep 0 local sessions after update, got %d", len(storeB.LocalSessions()))
 	}
+}
+
+func TestRedisSessionStoreExistsErrorDoesNotClaimLocalOwnership(t *testing.T) {
+	client, _ := newTestRedis(t)
+	client.AddHook(existsErrorHook{})
+
+	store := NewRedisSessionStore(client, time.Hour)
+	store.Set("sess_exists_err", &SessionState{AgentID: "a1"})
+
+	if got := countLocalTrackedSessions(store); got != 0 {
+		t.Fatalf("expected 0 locally tracked sessions when EXISTS fails, got %d", got)
+	}
+}
+
+func countLocalTrackedSessions(store *RedisSessionStore) int {
+	count := 0
+	store.local.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
 }
