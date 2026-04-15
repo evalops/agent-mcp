@@ -6,7 +6,7 @@ import (
 	"github.com/evalops/service-runtime/downstream"
 )
 
-type DownstreamClients struct {
+type downstreamClients struct {
 	Identity   *downstream.Client
 	Registry   *downstream.Client
 	Governance *downstream.Client
@@ -15,19 +15,19 @@ type DownstreamClients struct {
 	Memory     *downstream.Client
 }
 
-func (d *Deps) downstreamClients() *DownstreamClients {
+func (d *Deps) downstreamClients() *downstreamClients {
 	if d == nil {
 		return nil
 	}
 
 	d.downstreamsOnce.Do(func() {
-		d.downstreams = NewDownstreamClients(d.Breakers, d.Metrics, d.Logger)
+		d.downstreams = newDownstreamClients(d.Breakers, d.Metrics, d.Logger)
 	})
 	return d.downstreams
 }
 
-func NewDownstreamClients(breakers *Breakers, metrics *Metrics, logger *slog.Logger) *DownstreamClients {
-	return &DownstreamClients{
+func newDownstreamClients(breakers *Breakers, metrics *Metrics, logger *slog.Logger) *downstreamClients {
+	return &downstreamClients{
 		Identity:   newDownstreamClient("identity", downstream.FailClosed, breakerFor("identity", breakers), metrics, logger),
 		Registry:   newDownstreamClient("registry", downstream.FailOpen, breakerFor("registry", breakers), metrics, logger),
 		Governance: newDownstreamClient("governance", downstream.FailClosed, breakerFor("governance", breakers), metrics, logger),

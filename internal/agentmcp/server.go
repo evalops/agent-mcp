@@ -32,11 +32,10 @@ type Deps struct {
 	Breakers   *Breakers
 
 	downstreamsOnce sync.Once
-	downstreams     *DownstreamClients
+	downstreams     *downstreamClients
 }
 
 // Breakers holds circuit breakers wired into downstream call paths.
-// Breakers holds circuit breakers for each downstream service.
 type Breakers struct {
 	Identity   *Breaker
 	Registry   *Breaker
