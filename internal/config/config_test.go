@@ -104,3 +104,37 @@ func TestLoadNATSFromEnv(t *testing.T) {
 		t.Fatalf("expected nats subject shared.events, got %q", cfg.NATS.Subject)
 	}
 }
+
+func TestLoadFederationFromEnv(t *testing.T) {
+	t.Setenv("DEFAULT_WORKSPACE_ID", "ws_default")
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+	t.Setenv("GITHUB_TOKEN", "github-token")
+	t.Setenv("GOOGLE_OAUTH_ACCESS_TOKEN", "google-token")
+
+	cfg := Load()
+	if cfg.Federation.DefaultWorkspaceID != "ws_default" {
+		t.Fatalf("expected default workspace ws_default, got %q", cfg.Federation.DefaultWorkspaceID)
+	}
+	if cfg.Federation.AnthropicAPIKey != "anthropic-key" {
+		t.Fatalf("expected anthropic key, got %q", cfg.Federation.AnthropicAPIKey)
+	}
+	if cfg.Federation.OpenAIAPIKey != "openai-key" {
+		t.Fatalf("expected openai key, got %q", cfg.Federation.OpenAIAPIKey)
+	}
+	if cfg.Federation.GitHubToken != "github-token" {
+		t.Fatalf("expected github token, got %q", cfg.Federation.GitHubToken)
+	}
+	if cfg.Federation.GoogleAccessToken != "google-token" {
+		t.Fatalf("expected google token, got %q", cfg.Federation.GoogleAccessToken)
+	}
+}
+
+func TestLoadFederationDefaultWorkspaceFallsBackToOrganizationEnv(t *testing.T) {
+	t.Setenv("DEFAULT_ORGANIZATION_ID", "org_default")
+
+	cfg := Load()
+	if cfg.Federation.DefaultWorkspaceID != "org_default" {
+		t.Fatalf("expected default workspace from DEFAULT_ORGANIZATION_ID, got %q", cfg.Federation.DefaultWorkspaceID)
+	}
+}

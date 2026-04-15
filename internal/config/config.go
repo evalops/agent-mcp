@@ -19,6 +19,14 @@ type IdentityConfig struct {
 	TLS            mtls.ClientConfig
 }
 
+type FederationConfig struct {
+	DefaultWorkspaceID string
+	AnthropicAPIKey    string
+	OpenAIAPIKey       string
+	GitHubToken        string
+	GoogleAccessToken  string
+}
+
 type RegistryConfig struct {
 	BaseURL        string
 	RequestTimeout time.Duration
@@ -76,6 +84,7 @@ type Config struct {
 	StartupRetry        startup.Config
 	TLS                 mtls.ServerConfig
 	Identity            IdentityConfig
+	Federation          FederationConfig
 	Registry            RegistryConfig
 	Governance          GovernanceConfig
 	Approvals           ApprovalsConfig
@@ -113,6 +122,13 @@ func Load() Config {
 				KeyFile:    trimEnv("IDENTITY_KEY_FILE"),
 				ServerName: trimEnv("IDENTITY_SERVER_NAME"),
 			},
+		},
+		Federation: FederationConfig{
+			DefaultWorkspaceID: envFirstNonEmpty("DEFAULT_WORKSPACE_ID", "DEFAULT_ORGANIZATION_ID"),
+			AnthropicAPIKey:    trimEnv("ANTHROPIC_API_KEY"),
+			OpenAIAPIKey:       trimEnv("OPENAI_API_KEY"),
+			GitHubToken:        trimEnv("GITHUB_TOKEN"),
+			GoogleAccessToken:  envFirstNonEmpty("GOOGLE_OAUTH_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"),
 		},
 		Registry: RegistryConfig{
 			BaseURL:        trimEnv("REGISTRY_BASE_URL"),
@@ -234,4 +250,13 @@ func envOrDefaultDuration(key string, fallback time.Duration) time.Duration {
 
 func trimEnv(key string) string {
 	return strings.TrimSpace(os.Getenv(key))
+}
+
+func envFirstNonEmpty(keys ...string) string {
+	for _, key := range keys {
+		if value := trimEnv(key); value != "" {
+			return value
+		}
+	}
+	return ""
 }

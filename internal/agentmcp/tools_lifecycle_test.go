@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -175,6 +176,134 @@ func TestToolRegisterMissingToken(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for missing token")
+	}
+}
+
+func TestToolRegisterFallsBackToFederationOnUnauthorizedBearer(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/agents/register":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid_token"}`))
+		case "/v1/agents/federate":
+			var req clients.FederateAgentRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode federate request: %v", err)
+			}
+			if req.Provider != "openai" {
+				t.Fatalf("expected provider openai, got %q", req.Provider)
+			}
+			if req.ExternalToken != "user_token_123" {
+				t.Fatalf("expected fallback to bearer token, got %q", req.ExternalToken)
+			}
+			if req.OrganizationID != "ws_123" {
+				t.Fatalf("expected workspace ws_123, got %q", req.OrganizationID)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(clients.AgentSession{
+				AgentID:       "agent_federated",
+				AgentToken:    "tok_federated",
+				ExpiresAt:     time.Now().Add(time.Hour),
+				RunID:         "run_federated",
+				ScopesGranted: []string{"governance:read"},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	deps := newTestDeps(srv)
+	rc := newRequestContext(deps, "mcp_sess_1")
+
+	_, out, err := rc.toolRegister(context.Background(), nil, registerInput{
+		AgentType:   "codex",
+		Surface:     "cli",
+		WorkspaceID: "ws_123",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.AgentID != "agent_federated" {
+		t.Fatalf("expected federated agent id, got %q", out.AgentID)
+	}
+	if len(calls) != 2 || calls[0] != "/v1/agents/register" || calls[1] != "/v1/agents/federate" {
+		t.Fatalf("expected register then federate, got %#v", calls)
+	}
+}
+
+func TestToolRegisterUsesConfiguredFederationCredentialWithoutBearer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/agents/federate" {
+			t.Fatalf("expected only federate path, got %s", r.URL.Path)
+		}
+		var req clients.FederateAgentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode federate request: %v", err)
+		}
+		if req.Provider != "openai" {
+			t.Fatalf("expected provider openai, got %q", req.Provider)
+		}
+		if req.ExternalToken != "openai-local-token" {
+			t.Fatalf("expected configured OpenAI token, got %q", req.ExternalToken)
+		}
+		if req.OrganizationID != "ws_default" {
+			t.Fatalf("expected default workspace ws_default, got %q", req.OrganizationID)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(clients.AgentSession{
+			AgentID:    "agent_local",
+			AgentToken: "tok_local",
+			ExpiresAt:  time.Now().Add(time.Hour),
+			RunID:      "run_local",
+		})
+	}))
+	defer srv.Close()
+
+	deps := newTestDeps(srv)
+	deps.Config.Federation.DefaultWorkspaceID = "ws_default"
+	deps.Config.Federation.OpenAIAPIKey = "openai-local-token"
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Mcp-Session-Id", "mcp_sess_1")
+	rc := &requestContext{deps: deps, request: req, logger: testLogger}
+
+	_, out, err := rc.toolRegister(context.Background(), nil, registerInput{
+		AgentType: "codex",
+		Surface:   "cli",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.AgentID != "agent_local" {
+		t.Fatalf("expected federated local agent id, got %q", out.AgentID)
+	}
+}
+
+func TestToolRegisterConfiguredFederationRequiresDefaultWorkspaceOptIn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("identity should not be called")
+	}))
+	defer srv.Close()
+
+	deps := newTestDeps(srv)
+	deps.Config.Federation.OpenAIAPIKey = "openai-local-token"
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Mcp-Session-Id", "mcp_sess_1")
+	rc := &requestContext{deps: deps, request: req, logger: testLogger}
+
+	_, _, err := rc.toolRegister(context.Background(), nil, registerInput{
+		AgentType: "codex",
+		Surface:   "cli",
+	})
+	if err == nil {
+		t.Fatal("expected error when configured federation is not explicitly enabled")
+	}
+	if !strings.Contains(err.Error(), "missing user token") {
+		t.Fatalf("expected missing token error, got %v", err)
 	}
 }
 

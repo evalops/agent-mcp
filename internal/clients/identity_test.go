@@ -3,6 +3,7 @@ package clients
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -82,6 +83,72 @@ func TestRegisterAgentError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for 401 response")
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected HTTPError, got %T", err)
+	}
+	if httpErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", httpErr.StatusCode)
+	}
+}
+
+func TestFederateAgent(t *testing.T) {
+	expected := AgentSession{
+		AgentID:       "agent_federated123",
+		AgentToken:    "tok_federated",
+		ExpiresAt:     time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+		RunID:         "run_federated",
+		ScopesGranted: []string{"governance:read"},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/agents/federate" {
+			t.Fatalf("expected /v1/agents/federate, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("expected application/json, got %s", r.Header.Get("Content-Type"))
+		}
+
+		var req FederateAgentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Provider != "openai" {
+			t.Fatalf("expected provider openai, got %s", req.Provider)
+		}
+		if req.ExternalToken != "provider_tok" {
+			t.Fatalf("expected provider token, got %s", req.ExternalToken)
+		}
+		if req.OrganizationID != "ws_123" {
+			t.Fatalf("expected ws_123, got %s", req.OrganizationID)
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(expected)
+	}))
+	defer srv.Close()
+
+	client := NewIdentityClient(srv.URL, srv.Client(), 5*time.Second)
+	session, err := client.FederateAgent(context.Background(), FederateAgentRequest{
+		AgentType:      "codex",
+		ExternalToken:  "provider_tok",
+		OrganizationID: "ws_123",
+		Provider:       "openai",
+		Surface:        "cli",
+		Scopes:         []string{"governance:read"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if session.AgentID != expected.AgentID {
+		t.Fatalf("expected %s, got %s", expected.AgentID, session.AgentID)
+	}
+	if session.AgentToken != expected.AgentToken {
+		t.Fatalf("expected %s, got %s", expected.AgentToken, session.AgentToken)
 	}
 }
 

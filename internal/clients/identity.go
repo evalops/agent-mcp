@@ -26,6 +26,18 @@ type RegisterAgentRequest struct {
 	TTLSeconds   int            `json:"ttl_seconds,omitempty"`
 }
 
+type FederateAgentRequest struct {
+	AgentType      string         `json:"agent_type"`
+	Capabilities   []string       `json:"capabilities,omitempty"`
+	ExternalToken  string         `json:"external_token"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	OrganizationID string         `json:"organization_id"`
+	Provider       string         `json:"provider"`
+	Scopes         []string       `json:"scopes,omitempty"`
+	Surface        string         `json:"surface"`
+	TTLSeconds     int            `json:"ttl_seconds,omitempty"`
+}
+
 type AgentSession struct {
 	AgentID         string    `json:"agent_id"`
 	AgentToken      string    `json:"agent_token"`
@@ -34,6 +46,15 @@ type AgentSession struct {
 	ScopesDenied    []string  `json:"scopes_denied,omitempty"`
 	ScopesGranted   []string  `json:"scopes_granted,omitempty"`
 	ScopesRequested []string  `json:"scopes_requested,omitempty"`
+}
+
+type HTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("identity returned %d: %s", e.StatusCode, e.Body)
 }
 
 func NewIdentityClient(baseURL string, httpClient *http.Client, timeout time.Duration) *IdentityClient {
@@ -57,6 +78,23 @@ func (c *IdentityClient) RegisterAgent(ctx context.Context, userToken string, re
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+
+	return c.doAgentSessionRequest(httpReq)
+}
+
+func (c *IdentityClient) FederateAgent(ctx context.Context, req FederateAgentRequest) (AgentSession, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return AgentSession{}, fmt.Errorf("marshal federate request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/agents/federate", bytes.NewReader(body))
+	if err != nil {
+		return AgentSession{}, fmt.Errorf("build federate request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
 
 	return c.doAgentSessionRequest(httpReq)
 }
@@ -119,5 +157,5 @@ func (c *IdentityClient) doAgentSessionRequest(req *http.Request) (AgentSession,
 
 func readErrorResponse(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("identity returned %d: %s", resp.StatusCode, string(body))
+	return &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
 }
