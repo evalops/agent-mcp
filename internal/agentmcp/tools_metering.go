@@ -54,7 +54,7 @@ func (rc *requestContext) toolReportUsage(
 	}
 	requestID := uuid.New().String()
 
-	clonedMsg, _ := proto.Clone(&meterv1.RecordUsageRequest{
+	clonedMsg, ok := proto.Clone(&meterv1.RecordUsageRequest{
 		AgentId:      agentID,
 		Surface:      surface,
 		EventType:    eventType,
@@ -65,6 +65,9 @@ func (rc *requestContext) toolReportUsage(
 		TotalCostUsd: input.CostUSD,
 		RequestId:    requestID,
 	}).(*meterv1.RecordUsageRequest)
+	if !ok {
+		panic("proto.Clone returned unexpected RecordUsageRequest type")
+	}
 
 	eventAttrs := map[string]any{
 		"agent_id":      agentID,

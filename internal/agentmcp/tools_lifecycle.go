@@ -186,11 +186,14 @@ func (rc *requestContext) toolHeartbeat(
 	// Launched after session renewal so the agent doesn't wait on registry latency.
 	if rc.deps.Registry != nil && rc.deps.Config.Registry.BaseURL != "" {
 		// Clone proto message and capture values before goroutine to prevent races.
-		clonedMsg, _ := proto.Clone(&agentsv1.HeartbeatRequest{
+		clonedMsg, ok := proto.Clone(&agentsv1.HeartbeatRequest{
 			AgentId: state.AgentID,
 			Status:  agentsv1.AgentStatus_AGENT_STATUS_ACTIVE,
 			Surface: state.Surface,
 		}).(*agentsv1.HeartbeatRequest)
+		if !ok {
+			panic("proto.Clone returned unexpected HeartbeatRequest type")
+		}
 		agentToken := session.AgentToken
 		workspaceID := state.WorkspaceID
 		go func() {
