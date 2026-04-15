@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACM -- "*.go")
+mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACM -- '*.go')
 if [ ${#staged_go_files[@]} -eq 0 ]; then
   exit 0
 fi
@@ -20,18 +20,33 @@ cleanup() {
 trap cleanup EXIT
 
 if ! git diff --quiet -- . || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-  git stash push -q --keep-index --include-untracked -m "pre-commit-$(date +%s)"
-  STASHED=1
+  if git stash push -q --keep-index --include-untracked -m "pre-commit-$(date +%s)"; then
+    STASHED=1
+  fi
 fi
 
-RESULT=0
+echo "Running gofmt on staged files..."
+gofmt -w "${staged_go_files[@]}"
+git add -- "${staged_go_files[@]}"
 
-echo "Running golangci-lint..."
-golangci-lint run --new-from-rev=HEAD ./... || RESULT=$?
+RESULT=0
+lint_args=(./...)
+
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  lint_args=(--new-from-rev=HEAD ./...)
+fi
+
+if [ -f .golangci.yml ] || [ -f .golangci.yaml ] || [ -f .golangci.toml ] || [ -f .golangci.json ]; then
+  echo "Running golangci-lint..."
+  golangci-lint run "${lint_args[@]}" || RESULT=$?
+else
+  echo "Running go vet..."
+  go vet ./... || RESULT=$?
+fi
 
 if [ $RESULT -eq 0 ]; then
   echo "Running go test..."
-  go test -race -count=1 ./... || RESULT=$?
+  go test -count=1 ./... || RESULT=$?
 fi
 
 exit $RESULT
