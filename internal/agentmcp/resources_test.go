@@ -127,7 +127,7 @@ func TestReadApprovalHabitsUsesCache(t *testing.T) {
 		AutoApproveConfidence: 0.8,
 	}})
 
-	result, err := readApprovalHabits(nil, deps, "sess_1")
+	result, err := readApprovalHabits(context.TODO(), deps, "sess_1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
