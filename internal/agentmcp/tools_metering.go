@@ -2,10 +2,10 @@ package agentmcp
 
 import (
 	"context"
-	"time"
 
 	"connectrpc.com/connect"
 	meterv1 "github.com/evalops/proto/gen/go/meter/v1"
+	"github.com/evalops/service-runtime/downstream"
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/protobuf/proto"
@@ -66,11 +66,6 @@ func (rc *requestContext) toolReportUsage(
 		RequestId:    requestID,
 	}).(*meterv1.RecordUsageRequest)
 
-	if rc.deps.Breakers != nil && !rc.deps.Breakers.Meter.Allow() {
-		rc.logger.Warn("meter circuit breaker open -- skipping usage report (fail-open)", "agent_id", agentID, "model", input.Model)
-		return nil, reportUsageOutput{Recorded: false}, nil
-	}
-
 	eventAttrs := map[string]any{
 		"agent_id":      agentID,
 		"cost_usd":      input.CostUSD,
@@ -91,25 +86,17 @@ func (rc *requestContext) toolReportUsage(
 		bgCtx, cancel := detachedContextWithTimeout(ctx, rc.deps.Config.Meter.RequestTimeout)
 		defer cancel()
 
-		bgStart := time.Now()
 		bgReq := connect.NewRequest(clonedMsg)
 		if agentToken != "" {
 			bgReq.Header().Set("Authorization", "Bearer "+agentToken)
 		}
-		if _, err := rc.deps.Meter.RecordUsage(bgCtx, bgReq); err != nil {
-			rc.deps.Metrics.DownstreamErrors.WithLabelValues("meter").Inc()
-			if rc.deps.Breakers != nil {
-				rc.deps.Breakers.Meter.RecordFailure()
-			}
-			rc.logger.Warn("background usage report failed", "error", err)
-		} else {
-			if rc.deps.Breakers != nil {
-				rc.deps.Breakers.Meter.RecordSuccess()
-			}
+		resp, _ := downstream.CallOp(bgCtx, rc.deps.downstreamClients().Meter, "record_usage", func(ctx context.Context) (*connect.Response[meterv1.RecordUsageResponse], error) {
+			return rc.deps.Meter.RecordUsage(ctx, bgReq)
+		})
+		if resp != nil {
 			rc.deps.Metrics.UsageReports.Inc()
 			rc.deps.Events.Publish(bgCtx, workspaceID, "usage_report", requestID, "recorded", eventAttrs)
 		}
-		rc.deps.Metrics.DownstreamLatency.WithLabelValues("meter", "record_usage").Observe(time.Since(bgStart).Seconds())
 	}()
 
 	return nil, reportUsageOutput{Recorded: true, Async: true}, nil

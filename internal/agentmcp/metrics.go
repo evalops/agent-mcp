@@ -64,13 +64,13 @@ func newMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
 	downstreamErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "agent_mcp_downstream_errors_total",
 		Help: "Errors from downstream service calls",
-	}, []string{"service"})
+	}, []string{"downstream", "op"})
 
 	downstreamLatency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "agent_mcp_downstream_latency_seconds",
 		Help:    "Latency of downstream service calls",
 		Buckets: prometheus.DefBuckets,
-	}, []string{"service", "operation"})
+	}, []string{"downstream", "op"})
 
 	activeSessions := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "agent_mcp_active_sessions",

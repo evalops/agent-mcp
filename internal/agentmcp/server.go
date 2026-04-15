@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/evalops/agent-mcp/internal/clients"
 	"github.com/evalops/agent-mcp/internal/config"
@@ -29,6 +30,9 @@ type Deps struct {
 	Events     EventPublisher
 	Logger     *slog.Logger
 	Breakers   *Breakers
+
+	downstreamsOnce sync.Once
+	downstreams     *DownstreamClients
 }
 
 // Breakers holds circuit breakers wired into downstream call paths.

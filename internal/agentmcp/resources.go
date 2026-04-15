@@ -8,6 +8,7 @@ import (
 	"connectrpc.com/connect"
 	approvalsv1 "github.com/evalops/proto/gen/go/approvals/v1"
 	memoryv1 "github.com/evalops/proto/gen/go/memory/v1"
+	"github.com/evalops/service-runtime/downstream"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -132,11 +133,19 @@ func readApprovalHabits(ctx context.Context, deps *Deps, sessionID string) (*mcp
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
-	resp, err := deps.Approvals.GetHabits(ctx, req)
+	resp, err := downstream.CallOp(ctx, deps.downstreamClients().Approvals, "get_habits", func(ctx context.Context) (*connect.Response[approvalsv1.GetHabitsResponse], error) {
+		return deps.Approvals.GetHabits(ctx, req)
+	})
 	if err != nil {
 		return jsonResource("evalops://agent/habits", map[string]any{
 			"available": false,
 			"error":     err.Error(),
+		})
+	}
+	if resp == nil {
+		return jsonResource("evalops://agent/habits", map[string]any{
+			"available": false,
+			"message":   "approvals service unavailable",
 		})
 	}
 
@@ -179,11 +188,19 @@ func readOperatingRules(ctx context.Context, deps *Deps, sessionID string) (*mcp
 		req.Header().Set("X-Organization-ID", orgID)
 	}
 
-	resp, err := deps.Memory.GetOperatingRules(ctx, req)
+	resp, err := downstream.CallOp(ctx, deps.downstreamClients().Memory, "get_operating_rules", func(ctx context.Context) (*connect.Response[memoryv1.GetOperatingRulesResponse], error) {
+		return deps.Memory.GetOperatingRules(ctx, req)
+	})
 	if err != nil {
 		return jsonResource("evalops://agent/operating-rules", map[string]any{
 			"available": false,
 			"error":     err.Error(),
+		})
+	}
+	if resp == nil {
+		return jsonResource("evalops://agent/operating-rules", map[string]any{
+			"available": false,
+			"message":   "memory service unavailable",
 		})
 	}
 
