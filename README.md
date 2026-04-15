@@ -24,7 +24,11 @@ Unified MCP server for external agent integration with EvalOps. One config line 
 │    ├── evalops_check_approval               │
 │    │     └── Approvals (poll status)        │
 │    └── evalops_report_usage                 │
-│          └── Meter (token/cost tracking)    │
+│    │     └── Meter (token/cost tracking)    │
+│    ├── evalops_recall                       │
+│    │     └── Memory (semantic recall)       │
+│    └── evalops_store_memory                 │
+│          └── Memory (durable storage)       │
 └─────────────────────────────────────────────┘
 ```
 
@@ -75,6 +79,8 @@ If you run `agent-mcp` in the same local environment as the agent, you can skip 
 | `evalops_check_action` | Evaluate an action against governance policies |
 | `evalops_check_approval` | Check or wait for an approval request to be resolved |
 | `evalops_report_usage` | Report token usage and cost to the metering service |
+| `evalops_recall` | Search EvalOps memory for prior facts, project knowledge, and agent context |
+| `evalops_store_memory` | Persist durable facts, decisions, and project knowledge to EvalOps memory |
 | `evalops_create_api_key` | Create a new headless API key for CI/CD and automation |
 | `evalops_list_api_keys` | List your API keys with names, prefixes, scopes, and usage timestamps |
 
@@ -93,7 +99,7 @@ All configuration is via environment variables:
 | `GOVERNANCE_BASE_URL` | No | — | Governance service base URL (enables policy evaluation) |
 | `APPROVALS_BASE_URL` | No | — | Approvals service base URL (enables approval workflows) |
 | `METER_BASE_URL` | No | — | Meter service base URL (enables cost tracking) |
-| `MEMORY_BASE_URL` | No | — | Memory service base URL (enables operating rules) |
+| `MEMORY_BASE_URL` | No | — | Memory service base URL (enables operating rules plus recall/store memory tools) |
 | `SESSION_STORE` | No | `memory` | Session backend: `memory` or `redis` |
 | `SESSION_REDIS_URL` | With `SESSION_STORE=redis` | — | Redis URL for shared session persistence |
 | `SESSION_REAP_INTERVAL` | No | `30s` | Expiry sweep interval for the in-memory session backend |

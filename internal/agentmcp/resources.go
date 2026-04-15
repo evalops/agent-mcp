@@ -51,7 +51,15 @@ const protocolInstructions = "## EvalOps Agent Protocol\n" +
 	"\n" +
 	"After each LLM inference call, report usage via `evalops_report_usage` " +
 	"with model name, input/output token counts, and cost if known. This " +
-	"enables cost attribution and budget enforcement.\n"
+	"enables cost attribution and budget enforcement.\n" +
+	"\n" +
+	"### Memory Protocol\n" +
+	"\n" +
+	"Before tackling work that may depend on prior project context, call " +
+	"`evalops_recall` to search the agent, project, team, or organization " +
+	"memory scopes for relevant facts. When you learn something durable that " +
+	"should survive the current session, call `evalops_store_memory` to " +
+	"persist that fact for future runs.\n"
 
 const (
 	agentHookRequirementsURI       = "evalops://agent/hook-requirements"
