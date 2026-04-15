@@ -54,7 +54,7 @@ func (rc *requestContext) toolReportUsage(
 	}
 	requestID := uuid.New().String()
 
-	clonedMsg := proto.Clone(&meterv1.RecordUsageRequest{
+	clonedMsg, _ := proto.Clone(&meterv1.RecordUsageRequest{
 		AgentId:      agentID,
 		Surface:      surface,
 		EventType:    eventType,
