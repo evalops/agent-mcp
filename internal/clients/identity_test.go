@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -45,7 +47,9 @@ func TestRegisterAgent(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(expected)
+		if err := json.NewEncoder(w).Encode(expected); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -72,7 +76,9 @@ func TestRegisterAgent(t *testing.T) {
 func TestRegisterAgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"invalid_token"}`))
+		if _, err := w.Write([]byte(`{"error":"invalid_token"}`)); err != nil {
+			t.Fatalf("write error response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -169,12 +175,16 @@ func TestHeartbeatAgent(t *testing.T) {
 		}
 
 		var payload map[string]any
-		json.NewDecoder(r.Body).Decode(&payload)
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode heartbeat payload: %v", err)
+		}
 		if int(payload["ttl_seconds"].(float64)) != 1800 {
 			t.Fatalf("expected ttl_seconds 1800, got %v", payload["ttl_seconds"])
 		}
 
-		json.NewEncoder(w).Encode(expected)
+		if err := json.NewEncoder(w).Encode(expected); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -197,7 +207,9 @@ func TestDeregisterAgent(t *testing.T) {
 			t.Fatalf("expected bearer tok_abc")
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"revoked":true}`))
+		if _, err := w.Write([]byte(`{"revoked":true}`)); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -211,7 +223,9 @@ func TestDeregisterAgent(t *testing.T) {
 func TestDeregisterAgentError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error":"session_not_found"}`))
+		if _, err := w.Write([]byte(`{"error":"session_not_found"}`)); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -226,5 +240,84 @@ func TestNewIdentityClientDefaultHTTP(t *testing.T) {
 	client := NewIdentityClient("http://example.com", nil, 5*time.Second)
 	if client.httpClient == nil {
 		t.Fatal("expected default http client")
+	}
+}
+
+func TestIntrospectToken(t *testing.T) {
+	expectedAudience := []string{"https://mcp.evalops.dev"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/tokens/introspect" {
+			t.Fatalf("expected /v1/tokens/introspect, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer header.token.sig" {
+			t.Fatalf("expected Authorization bearer header.token.sig, got %s", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("expected application/json, got %s", r.Header.Get("Content-Type"))
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if strings.TrimSpace(string(body)) != "{}" {
+			t.Fatalf("expected {} body, got %q", string(body))
+		}
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(TokenIntrospection{
+			Active:         true,
+			Audience:       expectedAudience,
+			OrganizationID: "org_123",
+			Scopes:         []string{"agent:register"},
+			Subject:        "user_123",
+			TokenType:      "access",
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewIdentityClient(srv.URL, srv.Client(), 5*time.Second)
+	introspection, err := client.IntrospectToken(context.Background(), "header.token.sig")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !introspection.Active {
+		t.Fatal("expected active token")
+	}
+	if introspection.OrganizationID != "org_123" {
+		t.Fatalf("expected org_123, got %s", introspection.OrganizationID)
+	}
+	if len(introspection.Audience) != 1 || introspection.Audience[0] != expectedAudience[0] {
+		t.Fatalf("expected audience %v, got %v", expectedAudience, introspection.Audience)
+	}
+}
+
+func TestIntrospectTokenFallsBackToJWTAudience(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(TokenIntrospection{
+			Active: true,
+			Scopes: []string{"agent:register"},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewIdentityClient(srv.URL, srv.Client(), 5*time.Second)
+	token := strings.Join([]string{
+		"header",
+		"eyJhdWQiOlsiaHR0cHM6Ly9tY3AuZXZhbG9wcy5kZXYiXX0",
+		"sig",
+	}, ".")
+	introspection, err := client.IntrospectToken(context.Background(), token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(introspection.Audience) != 1 || introspection.Audience[0] != "https://mcp.evalops.dev" {
+		t.Fatalf("expected JWT audience fallback, got %v", introspection.Audience)
 	}
 }

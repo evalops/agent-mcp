@@ -57,7 +57,8 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 		return nil, fmt.Errorf("build memory http client: %w", err)
 	}
 
-	identityClient := clients.NewIdentityClient(cfg.Identity.BaseURL, identityHTTP, cfg.Identity.RequestTimeout)
+	identityClient := clients.NewIdentityClient(cfg.Identity.BaseURL, identityHTTP, cfg.Identity.RequestTimeout).
+		WithIntrospectURL(cfg.Identity.IntrospectURL)
 
 	// Session store: Redis or in-memory.
 	var sessionStore agentmcp.SessionBackend
@@ -159,7 +160,8 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 	mux.Handle("/healthz", httpkit.HealthHandler(cfg.ServiceName))
 	mux.Handle("/readyz", checker.Handler(5*time.Second))
 	mux.Handle("/metrics", httpkit.MetricsHandler())
-	mux.Handle("/mcp", agentmcp.NewHandler(deps))
+	mux.Handle("/.well-known/oauth-protected-resource", newProtectedResourceMetadataHandler(cfg))
+	mux.Handle("/mcp", newMCPAuthMiddleware(cfg, identityClient, logger)(agentmcp.NewHandler(deps)))
 
 	handler := httpkit.WithRequestID(httpkit.WithRequestLogging(logger)(mux))
 
@@ -215,7 +217,9 @@ func addHTTPHealthCheck(checker *health.Checker, name, baseURL string, httpClien
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 			return fmt.Errorf("healthz returned %s", resp.Status)
 		}

@@ -46,6 +46,11 @@ Add to `.claude/settings.json`:
 }
 ```
 
+On the first unauthenticated tool call, MCP clients that support OAuth 2.1 will
+receive a `401` challenge with protected resource metadata, discover the
+Identity authorization server, open the browser sign-in flow, and retry
+automatically with a bearer token bound to the MCP resource URL.
+
 ### OpenAI Codex
 
 Add to `.codex/config.toml`:
@@ -79,6 +84,9 @@ All configuration is via environment variables:
 |----------|----------|---------|-------------|
 | `IDENTITY_BASE_URL` | Yes | — | Identity service base URL |
 | `DEFAULT_WORKSPACE_ID` | No | — | Default workspace or organization used when local provider-token federation is enabled |
+| `IDENTITY_ISSUER_URL` | No | `IDENTITY_BASE_URL` | OAuth authorization server issuer advertised to MCP clients |
+| `IDENTITY_INTROSPECT_URL` | No | `IDENTITY_BASE_URL + /v1/tokens/introspect` | Explicit token introspection endpoint override |
+| `MCP_RESOURCE_URL` | No | inferred from request | Protected resource URL advertised in RFC 9728 metadata and bearer challenges |
 | `REGISTRY_BASE_URL` | No | — | Registry service base URL (enables discovery) |
 | `GOVERNANCE_BASE_URL` | No | — | Governance service base URL (enables policy evaluation) |
 | `APPROVALS_BASE_URL` | No | — | Approvals service base URL (enables approval workflows) |
@@ -101,6 +109,21 @@ When `DEFAULT_WORKSPACE_ID` is set, `evalops_register` can fall back to identity
 All services support mTLS via `*_CA_FILE`, `*_CERT_FILE`, `*_KEY_FILE`, `*_SERVER_NAME` env vars.
 
 The Helm chart exposes `session.store`, `session.redis.url`, `session.redis.existingSecretName`, `nats.url`, and `nats.existingSecretName` so shared Redis sessions and durable NATS event publishing can be enabled without rebuilding the service. Prefer secret-backed URLs for production credentials.
+
+## OAuth discovery
+
+`agent-mcp` exposes `GET /.well-known/oauth-protected-resource` and returns
+RFC 9728 metadata for the MCP endpoint. Unauthenticated `POST /mcp` requests
+receive:
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="https://agent-mcp.evalops.example/.well-known/oauth-protected-resource"
+```
+
+When a bearer token is present, `agent-mcp` introspects it against Identity,
+requires the token audience to match the MCP resource URL, and returns
+`403 insufficient_scope` when the current tool requires additional scopes.
 
 ## Running locally
 

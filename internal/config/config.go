@@ -13,6 +13,7 @@ import (
 
 type IdentityConfig struct {
 	BaseURL        string
+	IssuerURL      string
 	IntrospectURL  string
 	RequestTimeout time.Duration
 	CacheTTL       time.Duration
@@ -83,6 +84,7 @@ type Config struct {
 	Environment         string
 	Version             string
 	Addr                string
+	ResourceURL         string
 	SessionReapInterval time.Duration
 	StartupRetry        startup.Config
 	TLS                 mtls.ServerConfig
@@ -104,6 +106,7 @@ func Load() Config {
 		Environment:         envOrDefault("ENVIRONMENT", "development"),
 		Version:             envOrDefault("VERSION", "dev"),
 		Addr:                envOrDefault("ADDR", ":8080"),
+		ResourceURL:         trimEnv("MCP_RESOURCE_URL"),
 		SessionReapInterval: envOrDefaultDuration("SESSION_REAP_INTERVAL", 30*time.Second),
 		StartupRetry: startup.Config{
 			MaxAttempts: envOrDefaultInt("STARTUP_MAX_ATTEMPTS", startup.DefaultMaxAttempts),
@@ -116,6 +119,7 @@ func Load() Config {
 		},
 		Identity: IdentityConfig{
 			BaseURL:        trimEnv("IDENTITY_BASE_URL"),
+			IssuerURL:      trimEnv("IDENTITY_ISSUER_URL"),
 			IntrospectURL:  trimEnv("IDENTITY_INTROSPECT_URL"),
 			RequestTimeout: envOrDefaultDuration("IDENTITY_REQUEST_TIMEOUT", 5*time.Second),
 			CacheTTL:       envOrDefaultDuration("IDENTITY_CACHE_TTL", 30*time.Second),

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"testing"
 	"time"
 )
@@ -35,17 +34,23 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadFromEnv(t *testing.T) {
-	os.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
-	os.Setenv("GOVERNANCE_BASE_URL", "http://governance:8080")
-	defer os.Unsetenv("IDENTITY_BASE_URL")
-	defer os.Unsetenv("GOVERNANCE_BASE_URL")
+	t.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
+	t.Setenv("IDENTITY_ISSUER_URL", "https://identity.evalops.dev")
+	t.Setenv("GOVERNANCE_BASE_URL", "http://governance:8080")
+	t.Setenv("MCP_RESOURCE_URL", "https://mcp.evalops.dev")
 
 	cfg := Load()
 	if cfg.Identity.BaseURL != "http://identity:8080" {
 		t.Fatalf("expected identity URL, got %s", cfg.Identity.BaseURL)
 	}
+	if cfg.Identity.IssuerURL != "https://identity.evalops.dev" {
+		t.Fatalf("expected identity issuer URL, got %s", cfg.Identity.IssuerURL)
+	}
 	if cfg.Governance.BaseURL != "http://governance:8080" {
 		t.Fatalf("expected governance URL, got %s", cfg.Governance.BaseURL)
+	}
+	if cfg.ResourceURL != "https://mcp.evalops.dev" {
+		t.Fatalf("expected protected resource URL, got %s", cfg.ResourceURL)
 	}
 }
 
@@ -56,8 +61,7 @@ func TestValidateRequiresIdentity(t *testing.T) {
 		t.Fatal("expected validation error for missing IDENTITY_BASE_URL")
 	}
 
-	os.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
-	defer os.Unsetenv("IDENTITY_BASE_URL")
+	t.Setenv("IDENTITY_BASE_URL", "http://identity:8080")
 
 	cfg = Load()
 	err = cfg.Validate()
