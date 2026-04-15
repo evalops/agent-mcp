@@ -202,3 +202,33 @@ func TestRedisSessionStoreDeleteRemovesLocal(t *testing.T) {
 		t.Fatal("expected sess_2 to remain in local sessions")
 	}
 }
+
+func TestRedisSessionStoreUpdateDoesNotClaimLocalOwnership(t *testing.T) {
+	client, _ := newTestRedis(t)
+
+	storeA := NewRedisSessionStore(client, time.Hour)
+	storeB := NewRedisSessionStore(client, time.Hour)
+
+	storeA.Set("sess_shared", &SessionState{
+		AgentID:    "agent_shared",
+		AgentToken: "tok_initial",
+		AgentType:  "claude-code",
+		RunID:      "run_shared",
+		Surface:    "cli",
+	})
+
+	storeB.Set("sess_shared", &SessionState{
+		AgentID:    "agent_shared",
+		AgentToken: "tok_rotated",
+		AgentType:  "claude-code",
+		RunID:      "run_shared",
+		Surface:    "cli",
+	})
+
+	if len(storeA.LocalSessions()) != 1 {
+		t.Fatalf("expected storeA to keep 1 local session, got %d", len(storeA.LocalSessions()))
+	}
+	if len(storeB.LocalSessions()) != 0 {
+		t.Fatalf("expected storeB to keep 0 local sessions after update, got %d", len(storeB.LocalSessions()))
+	}
+}
