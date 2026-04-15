@@ -3,18 +3,21 @@ package clients
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
 // IdentityClient calls the Identity service REST endpoints for agent lifecycle.
 type IdentityClient struct {
-	baseURL    string
-	httpClient *http.Client
-	timeout    time.Duration
+	baseURL       string
+	introspectURL string
+	httpClient    *http.Client
+	timeout       time.Duration
 }
 
 type RegisterAgentRequest struct {
@@ -57,11 +60,38 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("identity returned %d: %s", e.StatusCode, e.Body)
 }
 
+type TokenIntrospection struct {
+	Active         bool      `json:"active"`
+	Audience       []string  `json:"audience,omitempty"`
+	Email          string    `json:"email,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
+	IssuedAt       time.Time `json:"issued_at,omitempty"`
+	Name           string    `json:"name,omitempty"`
+	OrganizationID string    `json:"organization_id,omitempty"`
+	Picture        string    `json:"picture,omitempty"`
+	Provider       string    `json:"provider,omitempty"`
+	Scopes         []string  `json:"scopes,omitempty"`
+	Service        string    `json:"service,omitempty"`
+	SessionID      string    `json:"session_id,omitempty"`
+	Subject        string    `json:"subject,omitempty"`
+	TenantID       string    `json:"tenant_id,omitempty"`
+	TokenType      string    `json:"token_type,omitempty"`
+	Error          string    `json:"error,omitempty"`
+}
+
 func NewIdentityClient(baseURL string, httpClient *http.Client, timeout time.Duration) *IdentityClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	return &IdentityClient{baseURL: baseURL, httpClient: httpClient, timeout: timeout}
+}
+
+func (c *IdentityClient) WithIntrospectURL(introspectURL string) *IdentityClient {
+	if c == nil {
+		return nil
+	}
+	c.introspectURL = strings.TrimSpace(introspectURL)
+	return c
 }
 
 func (c *IdentityClient) RegisterAgent(ctx context.Context, userToken string, req RegisterAgentRequest) (AgentSession, error) {
@@ -132,11 +162,48 @@ func (c *IdentityClient) DeregisterAgent(ctx context.Context, agentToken string)
 	if err != nil {
 		return fmt.Errorf("deregister agent: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode >= 400 {
 		return readErrorResponse(resp)
 	}
 	return nil
+}
+
+func (c *IdentityClient) IntrospectToken(ctx context.Context, token string) (TokenIntrospection, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	introspectURL := c.introspectURL
+	if introspectURL == "" {
+		introspectURL = strings.TrimRight(c.baseURL, "/") + "/v1/tokens/introspect"
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, introspectURL, bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		return TokenIntrospection{}, fmt.Errorf("build introspect request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return TokenIntrospection{}, fmt.Errorf("introspect token: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode >= 400 {
+		return TokenIntrospection{}, readErrorResponse(resp)
+	}
+	var result TokenIntrospection
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return TokenIntrospection{}, fmt.Errorf("decode introspection response: %w", err)
+	}
+	if len(result.Audience) == 0 {
+		result.Audience = decodeJWTAudience(token)
+	}
+	return result, nil
 }
 
 func (c *IdentityClient) doAgentSessionRequest(req *http.Request) (AgentSession, error) {
@@ -144,7 +211,9 @@ func (c *IdentityClient) doAgentSessionRequest(req *http.Request) (AgentSession,
 	if err != nil {
 		return AgentSession{}, fmt.Errorf("identity request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode >= 400 {
 		return AgentSession{}, readErrorResponse(resp)
 	}
@@ -158,4 +227,42 @@ func (c *IdentityClient) doAgentSessionRequest(req *http.Request) (AgentSession,
 func readErrorResponse(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
+}
+
+func decodeJWTAudience(token string) []string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil
+	}
+	var claims struct {
+		Audience any `json:"aud"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil
+	}
+	switch audience := claims.Audience.(type) {
+	case string:
+		if audience == "" {
+			return nil
+		}
+		return []string{audience}
+	case []any:
+		values := make([]string, 0, len(audience))
+		for _, raw := range audience {
+			value, ok := raw.(string)
+			if ok && value != "" {
+				values = append(values, value)
+			}
+		}
+		if len(values) == 0 {
+			return nil
+		}
+		return values
+	default:
+		return nil
+	}
 }
