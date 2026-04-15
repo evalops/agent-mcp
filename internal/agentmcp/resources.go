@@ -114,6 +114,16 @@ func readAgentStatus(deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, 
 			"message":    "no active session \u2014 call evalops_register first",
 		})
 	}
+	if state.IsAnonymous() {
+		return jsonResource("evalops://agent/status", map[string]any{
+			"active_sessions": deps.Sessions.ActiveCount(),
+			"anonymous":       true,
+			"expires_at":      state.ExpiresAt.Format("2006-01-02T15:04:05Z"),
+			"message":         "anonymous sandbox session active \u2014 authenticate to register an agent or unlock write operations",
+			"registered":      false,
+			"session_type":    SessionTypeAnonymous,
+		})
+	}
 	return jsonResource("evalops://agent/status", map[string]any{
 		"registered":      true,
 		"agent_id":        state.AgentID,
@@ -155,6 +165,14 @@ func readHookRequirements(deps *Deps, sessionID string) (*mcpsdk.ReadResourceRes
 
 func readApprovalHabits(ctx context.Context, deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, error) {
 	state, _ := deps.Sessions.Get(sessionID)
+	if state != nil && state.IsAnonymous() {
+		return jsonResource("evalops://agent/habits", map[string]any{
+			"anonymous": true,
+			"available": true,
+			"habits":    []any{},
+			"message":   "anonymous sandbox exposes workspace-default approval habits only; authenticate for learned workspace habits",
+		})
+	}
 	workspaceID := ""
 	agentToken := ""
 	if state != nil {
@@ -220,6 +238,15 @@ func approvalHabitsResource(habits []*approvalsv1.ApprovalHabit) (*mcpsdk.ReadRe
 }
 
 func readOperatingRules(ctx context.Context, deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, error) {
+	state, _ := deps.Sessions.Get(sessionID)
+	if state != nil && state.IsAnonymous() {
+		return jsonResource("evalops://agent/operating-rules", map[string]any{
+			"anonymous": true,
+			"available": true,
+			"message":   "anonymous sandbox exposes public/default operating rules only; authenticate for organization-scoped rules",
+			"rules":     []any{},
+		})
+	}
 	if deps.Memory == nil || deps.Config.Memory.BaseURL == "" {
 		return jsonResource("evalops://agent/operating-rules", map[string]any{
 			"available": false,
@@ -227,7 +254,6 @@ func readOperatingRules(ctx context.Context, deps *Deps, sessionID string) (*mcp
 		})
 	}
 
-	state, _ := deps.Sessions.Get(sessionID)
 	agentToken := ""
 	orgID := ""
 	if state != nil {

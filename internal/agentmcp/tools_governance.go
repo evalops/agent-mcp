@@ -20,11 +20,14 @@ type checkActionInput struct {
 }
 
 type checkActionOutput struct {
-	Decision     string   `json:"decision"`
-	RiskLevel    string   `json:"risk_level"`
-	Reasons      []string `json:"reasons,omitempty"`
-	ApprovalID   string   `json:"approval_id,omitempty"`
-	MatchedRules []string `json:"matched_rules,omitempty"`
+	Decision       string           `json:"decision"`
+	RiskLevel      string           `json:"risk_level"`
+	Reasons        []string         `json:"reasons,omitempty"`
+	ApprovalID     string           `json:"approval_id,omitempty"`
+	MatchedRules   []string         `json:"matched_rules,omitempty"`
+	DryRun         bool             `json:"dry_run,omitempty"`
+	Message        string           `json:"message,omitempty"`
+	UpgradeOptions []map[string]any `json:"upgrade_options,omitempty"`
 }
 
 func (rc *requestContext) toolCheckAction(
@@ -32,6 +35,9 @@ func (rc *requestContext) toolCheckAction(
 	_ *mcpsdk.CallToolRequest,
 	input checkActionInput,
 ) (*mcpsdk.CallToolResult, checkActionOutput, error) {
+	if rc.isAnonymousRequest() {
+		return nil, rc.anonymousCheckActionResult(input), nil
+	}
 	if rc.deps.Governance == nil || rc.deps.Config.Governance.BaseURL == "" {
 		return nil, checkActionOutput{Decision: "allow", RiskLevel: "low", Reasons: []string{"governance service not configured"}}, nil
 	}
@@ -182,6 +188,9 @@ func (rc *requestContext) toolCheckApproval(
 	_ *mcpsdk.CallToolRequest,
 	input checkApprovalInput,
 ) (*mcpsdk.CallToolResult, checkApprovalOutput, error) {
+	if rc.isAnonymousRequest() {
+		return rc.authenticationRequiredResult("check approval state"), checkApprovalOutput{}, nil
+	}
 	if rc.deps.Approvals == nil || rc.deps.Config.Approvals.BaseURL == "" {
 		return nil, checkApprovalOutput{}, fmt.Errorf("approvals service not configured")
 	}

@@ -50,6 +50,9 @@ func (rc *requestContext) toolCreateAPIKey(
 	_ *mcpsdk.CallToolRequest,
 	input createAPIKeyInput,
 ) (*mcpsdk.CallToolResult, createAPIKeyOutput, error) {
+	if rc.isAnonymousRequest() {
+		return rc.authenticationRequiredResult("create an API key"), createAPIKeyOutput{}, nil
+	}
 	bearerToken := rc.bearerToken()
 	if bearerToken == "" {
 		return nil, createAPIKeyOutput{}, fmt.Errorf("missing user bearer token")
@@ -103,6 +106,9 @@ func (rc *requestContext) toolListAPIKeys(
 	_ *mcpsdk.CallToolRequest,
 	_ struct{},
 ) (*mcpsdk.CallToolResult, listAPIKeysOutput, error) {
+	if rc.isAnonymousRequest() {
+		return rc.authenticationRequiredResult("list API keys"), listAPIKeysOutput{}, nil
+	}
 	bearerToken := rc.bearerToken()
 	if bearerToken == "" {
 		return nil, listAPIKeysOutput{}, fmt.Errorf("missing user bearer token")

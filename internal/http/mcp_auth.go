@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/evalops/agent-mcp/internal/agentmcp"
 	"github.com/evalops/agent-mcp/internal/clients"
 	"github.com/evalops/agent-mcp/internal/config"
 )
@@ -21,6 +25,7 @@ type mcpAuthContextKey struct{}
 type mcpRequestInfo struct {
 	Method    string
 	ToolName  string
+	AgentType string
 	UserToken string
 }
 
@@ -33,6 +38,7 @@ type mcpToolCallEnvelope struct {
 }
 
 type mcpRegisterArguments struct {
+	AgentType string `json:"agent_type"`
 	UserToken string `json:"user_token"`
 }
 
@@ -43,6 +49,24 @@ var mcpToolScopes = map[string]string{
 	"evalops_heartbeat":      "agent:heartbeat",
 	"evalops_register":       "agent:register",
 	"evalops_report_usage":   "meter:record",
+}
+
+const (
+	anonymousSessionTTL     = time.Hour
+	anonymousPerMinuteLimit = 10
+	anonymousPerHourLimit   = 100
+)
+
+type anonymousAccessLimiter struct {
+	mu      sync.Mutex
+	entries map[string]*anonymousAccessWindow
+}
+
+type anonymousAccessWindow struct {
+	hourCount         int
+	hourWindowStart   time.Time
+	minuteCount       int
+	minuteWindowStart time.Time
 }
 
 func newProtectedResourceMetadataHandler(cfg config.Config) http.HandlerFunc {
@@ -66,10 +90,11 @@ func newProtectedResourceMetadataHandler(cfg config.Config) http.HandlerFunc {
 	}
 }
 
-func newMCPAuthMiddleware(cfg config.Config, identityClient *clients.IdentityClient, logger *slog.Logger) func(http.Handler) http.Handler {
+func newMCPAuthMiddleware(cfg config.Config, identityClient *clients.IdentityClient, sessions agentmcp.SessionBackend, logger *slog.Logger) func(http.Handler) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	limiter := newAnonymousAccessLimiter()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost {
@@ -86,9 +111,32 @@ func newMCPAuthMiddleware(cfg config.Config, identityClient *clients.IdentityCli
 				return
 			}
 
+			now := time.Now().UTC()
+			if state, ok := activeSessionState(sessions, strings.TrimSpace(r.Header.Get("Mcp-Session-Id")), now); ok {
+				if state.IsAnonymous() {
+					if !limiter.Allow(clientAddress(r), now) {
+						writeMCPRateLimited(w)
+						return
+					}
+					r.Header.Set(agentmcp.AnonymousSandboxHeader, "true")
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			token := bearerTokenFromHeader(r.Header.Get("Authorization"))
 			if token == "" {
-				writeMCPUnauthorized(w, r, cfg)
+				if info.Method == "tools/call" && info.ToolName == "evalops_register" && hasConfiguredFederationCredential(cfg.Federation, info.AgentType) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				if !limiter.Allow(clientAddress(r), now) {
+					writeMCPRateLimited(w)
+					return
+				}
+				ensureAnonymousSession(sessions, strings.TrimSpace(r.Header.Get("Mcp-Session-Id")), now)
+				r.Header.Set(agentmcp.AnonymousSandboxHeader, "true")
+				next.ServeHTTP(w, r)
 				return
 			}
 
@@ -152,9 +200,142 @@ func inspectMCPRequest(r *http.Request) (mcpRequestInfo, error) {
 		if err := json.Unmarshal(envelope.Params.Arguments, &args); err != nil {
 			return info, fmt.Errorf("decode evalops_register arguments: %w", err)
 		}
+		info.AgentType = strings.TrimSpace(args.AgentType)
 		info.UserToken = strings.TrimSpace(args.UserToken)
 	}
 	return info, nil
+}
+
+func newAnonymousAccessLimiter() *anonymousAccessLimiter {
+	return &anonymousAccessLimiter{entries: make(map[string]*anonymousAccessWindow)}
+}
+
+func (l *anonymousAccessLimiter) Allow(key string, now time.Time) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		key = "unknown"
+	}
+	minuteStart := now.UTC().Truncate(time.Minute)
+	hourStart := now.UTC().Truncate(time.Hour)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	entry, ok := l.entries[key]
+	if !ok {
+		entry = &anonymousAccessWindow{}
+		l.entries[key] = entry
+	}
+	if entry.minuteWindowStart != minuteStart {
+		entry.minuteWindowStart = minuteStart
+		entry.minuteCount = 0
+	}
+	if entry.hourWindowStart != hourStart {
+		entry.hourWindowStart = hourStart
+		entry.hourCount = 0
+	}
+	if entry.minuteCount >= anonymousPerMinuteLimit || entry.hourCount >= anonymousPerHourLimit {
+		return false
+	}
+	entry.minuteCount++
+	entry.hourCount++
+	return true
+}
+
+func activeSessionState(sessions agentmcp.SessionBackend, sessionID string, now time.Time) (*agentmcp.SessionState, bool) {
+	if sessions == nil || strings.TrimSpace(sessionID) == "" {
+		return nil, false
+	}
+	state, ok := sessions.Get(sessionID)
+	if !ok || state == nil {
+		return nil, false
+	}
+	if !state.ExpiresAt.IsZero() && state.ExpiresAt.Before(now) {
+		sessions.Delete(sessionID)
+		return nil, false
+	}
+	return state, true
+}
+
+func ensureAnonymousSession(sessions agentmcp.SessionBackend, sessionID string, now time.Time) {
+	if sessions == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	if state, ok := activeSessionState(sessions, sessionID, now); ok && !state.IsAnonymous() {
+		return
+	} else if ok && state.IsAnonymous() {
+		return
+	}
+	sessions.Set(sessionID, &agentmcp.SessionState{
+		ExpiresAt:   now.Add(anonymousSessionTTL),
+		SessionType: agentmcp.SessionTypeAnonymous,
+		Surface:     "mcp",
+	})
+}
+
+func hasConfiguredFederationCredential(federation config.FederationConfig, agentType string) bool {
+	providers := configuredFederationProviders(federation)
+	if len(providers) == 0 {
+		return false
+	}
+	if provider := inferFederationProvider(agentType); provider != "" {
+		_, ok := providers[provider]
+		return ok
+	}
+	return len(providers) == 1
+}
+
+func configuredFederationProviders(federation config.FederationConfig) map[string]string {
+	configured := make(map[string]string, 4)
+	if strings.TrimSpace(federation.AnthropicAPIKey) != "" {
+		configured["anthropic"] = federation.AnthropicAPIKey
+	}
+	if strings.TrimSpace(federation.OpenAIAPIKey) != "" {
+		configured["openai"] = federation.OpenAIAPIKey
+	}
+	if strings.TrimSpace(federation.GitHubToken) != "" {
+		configured["github"] = federation.GitHubToken
+	}
+	if strings.TrimSpace(federation.GoogleAccessToken) != "" {
+		configured["google"] = federation.GoogleAccessToken
+	}
+	return configured
+}
+
+func inferFederationProvider(agentType string) string {
+	normalized := strings.ToLower(strings.TrimSpace(agentType))
+	switch {
+	case strings.Contains(normalized, "claude"), strings.Contains(normalized, "anthropic"):
+		return "anthropic"
+	case strings.Contains(normalized, "codex"), strings.Contains(normalized, "openai"):
+		return "openai"
+	case strings.Contains(normalized, "copilot"), strings.Contains(normalized, "github"):
+		return "github"
+	case strings.Contains(normalized, "gemini"), strings.Contains(normalized, "google"):
+		return "google"
+	default:
+		return ""
+	}
+}
+
+func clientAddress(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+	if forwarded != "" {
+		if parts := strings.Split(forwarded, ","); len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
+		return realIP
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func requiredScopeForRequest(info mcpRequestInfo) string {
@@ -248,6 +429,14 @@ func writeMCPInsufficientScope(w http.ResponseWriter, scope string) {
 		"error":   "insufficient_scope",
 		"message": "Additional authorization required.",
 		"scope":   scope,
+	})
+}
+
+func writeMCPRateLimited(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "60")
+	writeJSON(w, http.StatusTooManyRequests, map[string]string{
+		"error":   "rate_limited",
+		"message": "Anonymous sandbox rate limit exceeded. Retry in about a minute or authenticate for a full session.",
 	})
 }
 
