@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - uses: evalops/service-runtime/.github/actions/setup-go-service@95e1fb6f9850bae67ec32d0ffadd4a439fb320a4
@@ -20,7 +20,7 @@ jobs:
       - run: go build ./...
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - uses: evalops/service-runtime/.github/actions/setup-go-service@95e1fb6f9850bae67ec32d0ffadd4a439fb320a4
@@ -30,7 +30,7 @@ jobs:
           args: --timeout=5m
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - uses: evalops/service-runtime/.github/actions/setup-go-service@95e1fb6f9850bae67ec32d0ffadd4a439fb320a4
