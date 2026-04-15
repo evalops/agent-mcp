@@ -2,12 +2,15 @@ package agentmcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"connectrpc.com/connect"
 	approvalsv1 "github.com/evalops/proto/gen/go/approvals/v1"
 	governancev1 "github.com/evalops/proto/gen/go/governance/v1"
+	"github.com/evalops/service-runtime/downstream"
+	"github.com/evalops/service-runtime/resilience"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -33,19 +36,6 @@ func (rc *requestContext) toolCheckAction(
 		return nil, checkActionOutput{Decision: "allow", RiskLevel: "low", Reasons: []string{"governance service not configured"}}, nil
 	}
 
-	// Circuit breaker: fail closed (deny) when governance is unreachable.
-	if rc.deps.Breakers != nil && !rc.deps.Breakers.Governance.Allow() {
-		rc.deps.Metrics.GovernanceChecks.WithLabelValues("deny", "unknown").Inc()
-		rc.logger.Warn("governance circuit breaker open — failing closed",
-			"action_type", input.ActionType,
-		)
-		return nil, checkActionOutput{
-			Decision:  "deny",
-			RiskLevel: "critical",
-			Reasons:   []string{"governance service unreachable (circuit breaker open) — failing closed for safety"},
-		}, nil
-	}
-
 	sid := rc.mcpSessionID()
 	state, _ := rc.deps.Sessions.Get(sid)
 
@@ -68,25 +58,22 @@ func (rc *requestContext) toolCheckAction(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
-	start := time.Now()
-	resp, err := rc.deps.Governance.EvaluateAction(ctx, req)
-	rc.deps.Metrics.DownstreamLatency.WithLabelValues("governance", "evaluate_action").Observe(time.Since(start).Seconds())
+	resp, err := downstream.CallOp(ctx, rc.deps.downstreamClients().Governance, "evaluate_action", func(ctx context.Context) (*connect.Response[governancev1.EvaluateActionResponse], error) {
+		return rc.deps.Governance.EvaluateAction(ctx, req)
+	})
 	if err != nil {
-		rc.deps.Metrics.DownstreamErrors.WithLabelValues("governance").Inc()
-		if rc.deps.Breakers != nil {
-			rc.deps.Breakers.Governance.RecordFailure()
+		reason := fmt.Sprintf("governance evaluation failed: %v — failing closed for safety", err)
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			reason = "governance service unreachable (circuit breaker open) — failing closed for safety"
 		}
+
+		rc.deps.Metrics.GovernanceChecks.WithLabelValues("deny", "unknown").Inc()
 		rc.logger.Error("governance evaluation failed — failing closed", "action_type", input.ActionType, "error", err)
-		// Fail closed: return deny when governance is unreachable.
 		return nil, checkActionOutput{
 			Decision:  "deny",
 			RiskLevel: "critical",
-			Reasons:   []string{fmt.Sprintf("governance evaluation failed: %v — failing closed for safety", err)},
+			Reasons:   []string{reason},
 		}, nil
-	}
-
-	if rc.deps.Breakers != nil {
-		rc.deps.Breakers.Governance.RecordSuccess()
 	}
 
 	eval := resp.Msg.GetEvaluation()
@@ -122,7 +109,6 @@ func (rc *requestContext) toolCheckAction(
 	if decision == "require_approval" && rc.deps.Approvals != nil && rc.deps.Config.Approvals.BaseURL != "" {
 		approvalID, err := rc.createApprovalRequest(ctx, state, input.ActionType, input.ActionPayload, eval.GetRiskLevel())
 		if err != nil {
-			rc.deps.Metrics.DownstreamErrors.WithLabelValues("approvals").Inc()
 			rc.logger.Error("approval request creation failed", "error", err)
 		} else {
 			out.ApprovalID = approvalID
@@ -169,21 +155,14 @@ func (rc *requestContext) createApprovalRequest(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
-	if rc.deps.Breakers != nil && !rc.deps.Breakers.Approvals.Allow() {
-		rc.logger.Warn("approvals circuit breaker open -- failing closed")
-		return "", fmt.Errorf("approvals service unreachable (circuit breaker open)")
-	}
-	start := time.Now()
-	resp, err := rc.deps.Approvals.RequestApproval(ctx, req)
-	rc.deps.Metrics.DownstreamLatency.WithLabelValues("approvals", "request_approval").Observe(time.Since(start).Seconds())
+	resp, err := downstream.CallOp(ctx, rc.deps.downstreamClients().Approvals, "request_approval", func(ctx context.Context) (*connect.Response[approvalsv1.RequestApprovalResponse], error) {
+		return rc.deps.Approvals.RequestApproval(ctx, req)
+	})
 	if err != nil {
-		if rc.deps.Breakers != nil {
-			rc.deps.Breakers.Approvals.RecordFailure()
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return "", fmt.Errorf("approvals service unreachable (circuit breaker open)")
 		}
-		return "", err
-	}
-	if rc.deps.Breakers != nil {
-		rc.deps.Breakers.Approvals.RecordSuccess()
+		return "", fmt.Errorf("request approval failed: %w", err)
 	}
 	return resp.Msg.GetApprovalRequest().GetId(), nil
 }
@@ -242,11 +221,6 @@ func (rc *requestContext) checkApprovalOnce(
 	ctx context.Context,
 	approvalID, workspaceID, agentToken string,
 ) (*mcpsdk.CallToolResult, checkApprovalOutput, error) {
-	if rc.deps.Breakers != nil && !rc.deps.Breakers.Approvals.Allow() {
-		rc.logger.Warn("approvals circuit breaker open -- failing closed", "approval_id", approvalID)
-		return nil, checkApprovalOutput{}, fmt.Errorf("approvals service unreachable (circuit breaker open)")
-	}
-
 	req := connect.NewRequest(&approvalsv1.GetApprovalRequest{
 		ApprovalRequestId: approvalID,
 		WorkspaceId:       workspaceID,
@@ -255,18 +229,14 @@ func (rc *requestContext) checkApprovalOnce(
 		req.Header().Set("Authorization", "Bearer "+agentToken)
 	}
 
-	start := time.Now()
-	resp, err := rc.deps.Approvals.GetApproval(ctx, req)
-	rc.deps.Metrics.DownstreamLatency.WithLabelValues("approvals", "get_approval").Observe(time.Since(start).Seconds())
+	resp, err := downstream.CallOp(ctx, rc.deps.downstreamClients().Approvals, "get_approval", func(ctx context.Context) (*connect.Response[approvalsv1.GetApprovalResponse], error) {
+		return rc.deps.Approvals.GetApproval(ctx, req)
+	})
 	if err != nil {
-		rc.deps.Metrics.DownstreamErrors.WithLabelValues("approvals").Inc()
-		if rc.deps.Breakers != nil {
-			rc.deps.Breakers.Approvals.RecordFailure()
+		if errors.Is(err, resilience.ErrCircuitOpen) {
+			return nil, checkApprovalOutput{}, fmt.Errorf("approvals service unreachable (circuit breaker open)")
 		}
 		return nil, checkApprovalOutput{}, fmt.Errorf("get approval failed: %w", err)
-	}
-	if rc.deps.Breakers != nil {
-		rc.deps.Breakers.Approvals.RecordSuccess()
 	}
 
 	state := resp.Msg.GetState()

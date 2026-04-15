@@ -18,12 +18,12 @@ type IdentityClient struct {
 }
 
 type RegisterAgentRequest struct {
-	AgentType    string            `json:"agent_type"`
-	Capabilities []string          `json:"capabilities,omitempty"`
-	Metadata     map[string]any    `json:"metadata,omitempty"`
-	Scopes       []string          `json:"scopes,omitempty"`
-	Surface      string            `json:"surface"`
-	TTLSeconds   int               `json:"ttl_seconds,omitempty"`
+	AgentType    string         `json:"agent_type"`
+	Capabilities []string       `json:"capabilities,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+	Scopes       []string       `json:"scopes,omitempty"`
+	Surface      string         `json:"surface"`
+	TTLSeconds   int            `json:"ttl_seconds,omitempty"`
 }
 
 type AgentSession struct {

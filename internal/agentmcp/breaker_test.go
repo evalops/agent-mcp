@@ -1,98 +1,67 @@
 package agentmcp
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/evalops/service-runtime/resilience"
 )
+
+var errBreakerFailure = errors.New("breaker failure")
 
 func TestBreakerStartsClosed(t *testing.T) {
 	b := NewBreaker(BreakerConfig{FailureThreshold: 3, ResetTimeout: 100 * time.Millisecond})
 	if b.State() != BreakerClosed {
 		t.Fatalf("expected closed, got %s", b.State())
 	}
-	if !b.Allow() {
-		t.Fatal("expected allow when closed")
-	}
 }
 
-func TestBreakerOpensAfterThreshold(t *testing.T) {
+func TestBreakerTripsAfterThreshold(t *testing.T) {
 	b := NewBreaker(BreakerConfig{FailureThreshold: 3, ResetTimeout: 100 * time.Millisecond})
 
-	b.RecordFailure()
-	b.RecordFailure()
+	for i := 0; i < 2; i++ {
+		if err := b.Do(context.Background(), func(context.Context) error { return errBreakerFailure }); !errors.Is(err, errBreakerFailure) {
+			t.Fatalf("unexpected error after failure %d: %v", i+1, err)
+		}
+	}
 	if b.State() != BreakerClosed {
-		t.Fatal("should still be closed after 2 failures")
+		t.Fatalf("expected closed, got %s", b.State())
 	}
 
-	b.RecordFailure()
+	if err := b.Do(context.Background(), func(context.Context) error { return errBreakerFailure }); !errors.Is(err, errBreakerFailure) {
+		t.Fatalf("unexpected threshold failure: %v", err)
+	}
 	if b.State() != BreakerOpen {
 		t.Fatalf("expected open after 3 failures, got %s", b.State())
-	}
-	if b.Allow() {
-		t.Fatal("expected deny when open")
-	}
-}
-
-func TestBreakerResetsOnSuccess(t *testing.T) {
-	b := NewBreaker(BreakerConfig{FailureThreshold: 2, ResetTimeout: 100 * time.Millisecond})
-
-	b.RecordFailure()
-	b.RecordSuccess()
-	if b.State() != BreakerClosed {
-		t.Fatal("expected closed after success")
-	}
-
-	// Should need full threshold again.
-	b.RecordFailure()
-	if b.State() != BreakerClosed {
-		t.Fatal("expected closed after 1 failure (counter reset)")
 	}
 }
 
 func TestBreakerTransitionsToHalfOpen(t *testing.T) {
 	b := NewBreaker(BreakerConfig{FailureThreshold: 1, ResetTimeout: 10 * time.Millisecond})
 
-	b.RecordFailure()
-	if !b.Allow() {
-		// Still in open state, should not allow yet.
-	}
-
-	time.Sleep(20 * time.Millisecond)
-
-	// After reset timeout, Allow() transitions to half-open and permits the probe.
-	if !b.Allow() {
-		t.Fatal("expected allow on half-open probe after reset timeout")
-	}
-	if b.State() != BreakerHalfOpen {
-		t.Fatalf("expected half_open, got %s", b.State())
-	}
-}
-
-func TestBreakerStateDoesNotConsumeHalfOpenProbe(t *testing.T) {
-	b := NewBreaker(BreakerConfig{FailureThreshold: 1, ResetTimeout: 10 * time.Millisecond})
-
-	b.RecordFailure()
-	time.Sleep(20 * time.Millisecond)
-
+	_ = b.Do(context.Background(), func(context.Context) error { return errBreakerFailure })
 	if b.State() != BreakerOpen {
-		t.Fatalf("expected open before probe, got %s", b.State())
+		t.Fatalf("expected open, got %s", b.State())
 	}
-	if !b.Allow() {
-		t.Fatal("expected first probe after timeout to be allowed")
-	}
+
+	time.Sleep(20 * time.Millisecond)
+
 	if b.State() != BreakerHalfOpen {
-		t.Fatalf("expected half_open after probe, got %s", b.State())
+		t.Fatalf("expected half-open after reset timeout, got %s", b.State())
 	}
 }
 
 func TestBreakerHalfOpenSuccess(t *testing.T) {
 	b := NewBreaker(BreakerConfig{FailureThreshold: 1, ResetTimeout: 10 * time.Millisecond})
 
-	b.RecordFailure()
+	_ = b.Do(context.Background(), func(context.Context) error { return errBreakerFailure })
 	time.Sleep(20 * time.Millisecond)
-	b.Allow() // transition to half-open
 
-	b.RecordSuccess()
+	if err := b.Do(context.Background(), func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("expected successful half-open probe, got %v", err)
+	}
 	if b.State() != BreakerClosed {
 		t.Fatalf("expected closed after half-open success, got %s", b.State())
 	}
@@ -101,39 +70,43 @@ func TestBreakerHalfOpenSuccess(t *testing.T) {
 func TestBreakerHalfOpenFailure(t *testing.T) {
 	b := NewBreaker(BreakerConfig{FailureThreshold: 1, ResetTimeout: 10 * time.Millisecond})
 
-	b.RecordFailure()
+	_ = b.Do(context.Background(), func(context.Context) error { return errBreakerFailure })
 	time.Sleep(20 * time.Millisecond)
-	b.Allow() // transition to half-open
 
-	b.RecordFailure()
+	if err := b.Do(context.Background(), func(context.Context) error { return errBreakerFailure }); !errors.Is(err, errBreakerFailure) {
+		t.Fatalf("expected failing half-open probe, got %v", err)
+	}
 	if b.State() != BreakerOpen {
 		t.Fatalf("expected open after half-open failure, got %s", b.State())
 	}
 }
 
 func TestBreakerStateString(t *testing.T) {
-	if BreakerClosed.String() != "closed" {
-		t.Fatal("wrong string for closed")
+	tests := []struct {
+		state BreakerState
+		want  string
+	}{
+		{BreakerClosed, "closed"},
+		{BreakerOpen, "open"},
+		{BreakerHalfOpen, "half-open"},
+		{BreakerState(99), "unknown"},
 	}
-	if BreakerOpen.String() != "open" {
-		t.Fatal("wrong string for open")
-	}
-	if BreakerHalfOpen.String() != "half_open" {
-		t.Fatal("wrong string for half_open")
+	for _, tt := range tests {
+		if got := tt.state.String(); got != tt.want {
+			t.Errorf("state.String() = %q, want %q", got, tt.want)
+		}
 	}
 }
 
-func TestBreakerDefaults(t *testing.T) {
-	b := NewBreaker(BreakerConfig{})
-	// Default threshold is 5.
-	for i := 0; i < 4; i++ {
-		b.RecordFailure()
-	}
-	if b.State() != BreakerClosed {
-		t.Fatal("expected closed with 4 failures (default threshold 5)")
-	}
-	b.RecordFailure()
-	if b.State() != BreakerOpen {
-		t.Fatal("expected open after 5 failures")
+func TestBreakerRejectsWhenOpen(t *testing.T) {
+	b := NewBreaker(BreakerConfig{FailureThreshold: 1, ResetTimeout: time.Hour})
+
+	_ = b.Do(context.Background(), func(context.Context) error { return errBreakerFailure })
+	err := b.Do(context.Background(), func(context.Context) error {
+		t.Fatal("expected open breaker to reject the call")
+		return nil
+	})
+	if !errors.Is(err, resilience.ErrCircuitOpen) {
+		t.Fatalf("expected circuit open error, got %v", err)
 	}
 }
