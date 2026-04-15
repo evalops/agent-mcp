@@ -30,6 +30,9 @@ func (rc *requestContext) toolReportUsage(
 	_ *mcpsdk.CallToolRequest,
 	input reportUsageInput,
 ) (*mcpsdk.CallToolResult, reportUsageOutput, error) {
+	if rc.isAnonymousRequest() {
+		return rc.authenticationRequiredResult("report metered usage"), reportUsageOutput{Recorded: false}, nil
+	}
 	if rc.deps.Meter == nil || rc.deps.Config.Meter.BaseURL == "" {
 		return nil, reportUsageOutput{Recorded: false}, nil
 	}

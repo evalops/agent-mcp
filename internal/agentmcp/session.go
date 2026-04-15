@@ -8,6 +8,7 @@ import (
 
 // SessionState holds per-MCP-session agent state.
 type SessionState struct {
+	SessionType    string    `json:"session_type,omitempty"`
 	AgentID        string    `json:"agent_id"`
 	AgentToken     string    `json:"agent_token"`
 	AgentType      string    `json:"agent_type"`
@@ -17,6 +18,15 @@ type SessionState struct {
 	RunID          string    `json:"run_id"`
 	Surface        string    `json:"surface"`
 	WorkspaceID    string    `json:"workspace_id,omitempty"`
+}
+
+const (
+	SessionTypeAgent     = "agent"
+	SessionTypeAnonymous = "anonymous"
+)
+
+func (s *SessionState) IsAnonymous() bool {
+	return s != nil && s.SessionType == SessionTypeAnonymous
 }
 
 // SessionBackend is the interface for session persistence.

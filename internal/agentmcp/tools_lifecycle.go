@@ -42,6 +42,9 @@ func (rc *requestContext) toolRegister(
 	_ *mcpsdk.CallToolRequest,
 	input registerInput,
 ) (*mcpsdk.CallToolResult, registerOutput, error) {
+	if rc.isAnonymousRequest() {
+		return rc.authenticationRequiredResult("register this agent"), registerOutput{}, nil
+	}
 	workspaceID := strings.TrimSpace(input.WorkspaceID)
 	if workspaceID == "" {
 		workspaceID = strings.TrimSpace(rc.deps.Config.Federation.DefaultWorkspaceID)
@@ -69,6 +72,7 @@ func (rc *requestContext) toolRegister(
 	sid := rc.mcpSessionID()
 	if sid != "" {
 		rc.deps.Sessions.Set(sid, &SessionState{
+			SessionType:    SessionTypeAgent,
 			AgentID:        session.AgentID,
 			AgentToken:     session.AgentToken,
 			AgentType:      input.AgentType,
@@ -278,6 +282,9 @@ func (rc *requestContext) toolHeartbeat(
 	_ *mcpsdk.CallToolRequest,
 	input heartbeatInput,
 ) (*mcpsdk.CallToolResult, heartbeatOutput, error) {
+	if rc.isAnonymousRequest() {
+		return rc.authenticationRequiredResult("renew a registered agent session"), heartbeatOutput{}, nil
+	}
 	sid := rc.mcpSessionID()
 	state, ok := rc.deps.Sessions.Get(sid)
 	if !ok {
@@ -359,6 +366,9 @@ func (rc *requestContext) toolDeregister(
 	_ *mcpsdk.CallToolRequest,
 	_ deregisterInput,
 ) (*mcpsdk.CallToolResult, deregisterOutput, error) {
+	if rc.isAnonymousRequest() {
+		return rc.authenticationRequiredResult("deregister a registered agent"), deregisterOutput{}, nil
+	}
 	sid := rc.mcpSessionID()
 	state, ok := rc.deps.Sessions.Get(sid)
 	if !ok {

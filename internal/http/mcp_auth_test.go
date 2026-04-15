@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evalops/agent-mcp/internal/agentmcp"
 	"github.com/evalops/agent-mcp/internal/clients"
 	"github.com/evalops/agent-mcp/internal/config"
 )
@@ -42,25 +43,56 @@ func TestProtectedResourceMetadataHandler(t *testing.T) {
 	}
 }
 
-func TestMCPAuthMiddlewareReturns401WithProtectedResourceMetadata(t *testing.T) {
+func TestMCPAuthMiddlewareCreatesAnonymousSessionForUnauthenticatedRequests(t *testing.T) {
 	cfg := config.Config{ResourceURL: "https://mcp.evalops.dev"}
 	identityClient := clients.NewIdentityClient("http://identity.invalid", http.DefaultClient, time.Second)
-	handler := newMCPAuthMiddleware(cfg, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("next handler should not be called")
+	sessions := agentmcp.NewSessionStore()
+	nextCalled := false
+	handler := newMCPAuthMiddleware(cfg, identityClient, sessions, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"evalops_check_action","arguments":{"action_type":"Bash"}}}`))
+	req.Header.Set("Mcp-Session-Id", "sess_anon")
+	handler.ServeHTTP(rec, req)
+
+	if !nextCalled {
+		t.Fatal("expected next handler to run")
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	state, ok := sessions.Get("sess_anon")
+	if !ok || state == nil || !state.IsAnonymous() {
+		t.Fatalf("expected anonymous session state, got %#v", state)
+	}
+}
+
+func TestMCPAuthMiddlewareAllowsRegisterWhenFederationCredentialConfigured(t *testing.T) {
+	cfg := config.Config{
+		Federation:  config.FederationConfig{OpenAIAPIKey: "sk-openai"},
+		ResourceURL: "https://mcp.evalops.dev",
+	}
+	identityClient := clients.NewIdentityClient("http://identity.invalid", http.DefaultClient, time.Second)
+	sessions := agentmcp.NewSessionStore()
+	nextCalled := false
+	handler := newMCPAuthMiddleware(cfg, identityClient, sessions, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusNoContent)
 	}))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"evalops_register","arguments":{"agent_type":"codex","surface":"cli"}}}`))
+	req.Header.Set("Mcp-Session-Id", "sess_reg")
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
+	if !nextCalled {
+		t.Fatal("expected next handler to run")
 	}
-	if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer resource_metadata="https://mcp.evalops.dev/.well-known/oauth-protected-resource"` {
-		t.Fatalf("unexpected WWW-Authenticate header %q", got)
-	}
-	if !strings.Contains(rec.Body.String(), `"error":"unauthorized"`) {
-		t.Fatalf("expected unauthorized body, got %s", rec.Body.String())
+	if _, ok := sessions.Get("sess_reg"); ok {
+		t.Fatal("did not expect anonymous session when register can use configured federation")
 	}
 }
 
@@ -73,7 +105,7 @@ func TestMCPAuthMiddlewareAllowsRegisterWithExplicitUserToken(t *testing.T) {
 
 	identityClient := clients.NewIdentityClient(identitySrv.URL, identitySrv.Client(), time.Second)
 	nextCalled := false
-	handler := newMCPAuthMiddleware(cfg, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newMCPAuthMiddleware(cfg, identityClient, agentmcp.NewSessionStore(), authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -102,7 +134,7 @@ func TestMCPAuthMiddlewareReturns403ForInsufficientScope(t *testing.T) {
 
 	cfg := config.Config{ResourceURL: "https://mcp.evalops.dev"}
 	identityClient := clients.NewIdentityClient(identitySrv.URL, identitySrv.Client(), time.Second)
-	handler := newMCPAuthMiddleware(cfg, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newMCPAuthMiddleware(cfg, identityClient, agentmcp.NewSessionStore(), authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not be called")
 	}))
 
@@ -128,7 +160,7 @@ func TestMCPAuthMiddlewareRequiresRegisterScopeForDeregister(t *testing.T) {
 
 	cfg := config.Config{ResourceURL: "https://mcp.evalops.dev"}
 	identityClient := clients.NewIdentityClient(identitySrv.URL, identitySrv.Client(), time.Second)
-	handler := newMCPAuthMiddleware(cfg, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newMCPAuthMiddleware(cfg, identityClient, agentmcp.NewSessionStore(), authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not be called")
 	}))
 
@@ -154,7 +186,7 @@ func TestMCPAuthMiddlewareRejectsAudienceMismatch(t *testing.T) {
 
 	cfg := config.Config{ResourceURL: "https://mcp.evalops.dev"}
 	identityClient := clients.NewIdentityClient(identitySrv.URL, identitySrv.Client(), time.Second)
-	handler := newMCPAuthMiddleware(cfg, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newMCPAuthMiddleware(cfg, identityClient, agentmcp.NewSessionStore(), authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not be called")
 	}))
 
@@ -178,7 +210,7 @@ func TestMCPAuthMiddlewareAllowsValidBearerToken(t *testing.T) {
 	cfg := config.Config{ResourceURL: "https://mcp.evalops.dev"}
 	identityClient := clients.NewIdentityClient(identitySrv.URL, identitySrv.Client(), time.Second)
 	nextCalled := false
-	handler := newMCPAuthMiddleware(cfg, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newMCPAuthMiddleware(cfg, identityClient, agentmcp.NewSessionStore(), authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -204,7 +236,7 @@ func TestMCPAuthMiddlewareRejectsBearerTokensWithoutConfiguredResourceURL(t *tes
 	defer identitySrv.Close()
 
 	identityClient := clients.NewIdentityClient(identitySrv.URL, identitySrv.Client(), time.Second)
-	handler := newMCPAuthMiddleware(config.Config{}, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := newMCPAuthMiddleware(config.Config{}, identityClient, agentmcp.NewSessionStore(), authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not be called")
 	}))
 
@@ -217,5 +249,31 @@ func TestMCPAuthMiddlewareRejectsBearerTokensWithoutConfiguredResourceURL(t *tes
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestMCPAuthMiddlewareRateLimitsAnonymousRequests(t *testing.T) {
+	cfg := config.Config{ResourceURL: "https://mcp.evalops.dev"}
+	identityClient := clients.NewIdentityClient("http://identity.invalid", http.DefaultClient, time.Second)
+	handler := newMCPAuthMiddleware(cfg, identityClient, agentmcp.NewSessionStore(), authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for i := 0; i < anonymousPerMinuteLimit; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"evalops_check_action","arguments":{"action_type":"Bash"}}}`))
+		req.RemoteAddr = "203.0.113.10:54321"
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("request %d: expected 204, got %d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"evalops_check_action","arguments":{"action_type":"Bash"}}}`))
+	req.RemoteAddr = "203.0.113.10:54321"
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }

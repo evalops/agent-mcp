@@ -161,7 +161,7 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 	mux.Handle("/readyz", checker.Handler(5*time.Second))
 	mux.Handle("/metrics", httpkit.MetricsHandler())
 	mux.Handle("/.well-known/oauth-protected-resource", newProtectedResourceMetadataHandler(cfg))
-	mux.Handle("/mcp", newMCPAuthMiddleware(cfg, identityClient, logger)(agentmcp.NewHandler(deps)))
+	mux.Handle("/mcp", newMCPAuthMiddleware(cfg, identityClient, sessionStore, logger)(agentmcp.NewHandler(deps)))
 
 	handler := httpkit.WithRequestID(httpkit.WithRequestLogging(logger)(mux))
 
@@ -183,6 +183,9 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 		if len(sessions) > 0 {
 			logger.Info("graceful shutdown: deregistering active sessions", "count", len(sessions))
 			for _, state := range sessions {
+				if state == nil || state.IsAnonymous() || state.AgentToken == "" {
+					continue
+				}
 				if err := identityClient.DeregisterAgent(ctx, state.AgentToken); err != nil {
 					logger.Warn("shutdown deregister failed", "agent_id", state.AgentID, "error", err)
 				} else {
