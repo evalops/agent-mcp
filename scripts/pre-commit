@@ -1,39 +1,35 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
-
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACM -- "*.go")
 if [ ${#staged_go_files[@]} -eq 0 ]; then
   exit 0
 fi
 
-stashed=0
+STASHED=0
 cleanup() {
-  if [ "$stashed" -eq 1 ]; then
+  if [ "$STASHED" -eq 1 ]; then
     git stash pop -q >/dev/null 2>&1 || true
+    STASHED=0
   fi
 }
 trap cleanup EXIT
 
 if ! git diff --quiet -- . || [ -n "$(git ls-files --others --exclude-standard)" ]; then
   git stash push -q --keep-index --include-untracked -m "pre-commit-$(date +%s)"
-  stashed=1
+  STASHED=1
 fi
 
-echo "Running gofmt on staged files..."
-gofmt -w "${staged_go_files[@]}"
-git add -- "${staged_go_files[@]}"
+RESULT=0
 
-if [ -f .golangci.yml ]; then
-  echo "Running golangci-lint..."
-  golangci-lint run ./...
-else
-  echo "Running go vet..."
-  go vet ./...
+echo "Running golangci-lint..."
+golangci-lint run --new-from-rev=HEAD ./... || RESULT=$?
+
+if [ $RESULT -eq 0 ]; then
+  echo "Running go test..."
+  go test -race -count=1 ./... || RESULT=$?
 fi
 
-echo "Running go test..."
-go test ./...
+exit $RESULT
