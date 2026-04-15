@@ -296,6 +296,8 @@ func (c *IdentityClient) ListAPIKeys(ctx context.Context, userToken string) ([]A
 }
 
 func (c *IdentityClient) doAgentSessionRequest(req *http.Request) (AgentSession, error) {
+	// #nosec G107 -- req URLs are built from operator-supplied internal service base URLs.
+	//nolint:gosec // Request targets the configured internal Identity service, not user input.
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return AgentSession{}, fmt.Errorf("identity request failed: %w", err)

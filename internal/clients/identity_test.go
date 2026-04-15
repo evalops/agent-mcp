@@ -353,6 +353,7 @@ func TestCreateAPIKey(t *testing.T) {
 
 		w.WriteHeader(http.StatusCreated)
 		if err := json.NewEncoder(w).Encode(CreateAPIKeyResponse{
+			// #nosec G117 -- fake API key fixture for response decoding coverage.
 			APIKey: "pk_live_abc123",
 			Key: APIKey{
 				ID:             "key_123",

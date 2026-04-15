@@ -402,9 +402,11 @@ func TestToolHeartbeatBackgroundRegistryCallUsesConfiguredTimeout(t *testing.T) 
 
 	done := make(chan timeoutResult, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(clients.AgentSession{
+		if err := json.NewEncoder(w).Encode(clients.AgentSession{
 			AgentID: "agent_test", AgentToken: "tok_rotated", ExpiresAt: time.Now().Add(time.Hour),
-		})
+		}); err != nil {
+			t.Errorf("encode heartbeat response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
