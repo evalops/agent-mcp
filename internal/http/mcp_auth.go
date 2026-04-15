@@ -39,7 +39,7 @@ type mcpRegisterArguments struct {
 var mcpToolScopes = map[string]string{
 	"evalops_check_action":   "governance:evaluate",
 	"evalops_check_approval": "governance:evaluate",
-	"evalops_deregister":     "agent:heartbeat",
+	"evalops_deregister":     "agent:register",
 	"evalops_heartbeat":      "agent:heartbeat",
 	"evalops_register":       "agent:register",
 	"evalops_report_usage":   "meter:record",
@@ -102,7 +102,13 @@ func newMCPAuthMiddleware(cfg config.Config, identityClient *clients.IdentityCli
 				writeMCPUnauthorized(w, r, cfg)
 				return
 			}
-			if !audienceMatchesResource(introspection.Audience, protectedResourceURL(r, cfg)) {
+			resourceURL := configuredProtectedResourceURL(cfg)
+			if resourceURL == "" {
+				logger.Warn("protected resource URL is not configured")
+				writeMCPUnauthorized(w, r, cfg)
+				return
+			}
+			if !audienceMatchesResource(introspection.Audience, resourceURL) {
 				logger.Warn("token audience does not match protected resource", "audience", introspection.Audience)
 				writeMCPUnauthorized(w, r, cfg)
 				return
@@ -176,7 +182,7 @@ func bearerTokenFromHeader(authorization string) string {
 }
 
 func protectedResourceURL(r *http.Request, cfg config.Config) string {
-	if configured := strings.TrimRight(strings.TrimSpace(cfg.ResourceURL), "/"); configured != "" {
+	if configured := configuredProtectedResourceURL(cfg); configured != "" {
 		return configured
 	}
 	scheme := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
@@ -192,6 +198,10 @@ func protectedResourceURL(r *http.Request, cfg config.Config) string {
 		host = strings.TrimSpace(r.Host)
 	}
 	return strings.TrimRight(scheme+"://"+host, "/")
+}
+
+func configuredProtectedResourceURL(cfg config.Config) string {
+	return strings.TrimRight(strings.TrimSpace(cfg.ResourceURL), "/")
 }
 
 func audienceMatchesResource(audience []string, resource string) bool {

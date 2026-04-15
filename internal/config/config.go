@@ -215,6 +215,9 @@ func (c Config) Validate() error {
 	if c.Identity.BaseURL == "" {
 		return fmt.Errorf("IDENTITY_BASE_URL is required")
 	}
+	if strings.TrimSpace(c.ResourceURL) == "" {
+		return fmt.Errorf("MCP_RESOURCE_URL is required")
+	}
 	switch c.Session.Store {
 	case "", "memory":
 	case "redis":

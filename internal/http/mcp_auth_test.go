@@ -119,6 +119,32 @@ func TestMCPAuthMiddlewareReturns403ForInsufficientScope(t *testing.T) {
 	}
 }
 
+func TestMCPAuthMiddlewareRequiresRegisterScopeForDeregister(t *testing.T) {
+	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"active":true,"audience":["https://mcp.evalops.dev"],"scopes":["agent:heartbeat"]}`))
+	}))
+	defer identitySrv.Close()
+
+	cfg := config.Config{ResourceURL: "https://mcp.evalops.dev"}
+	identityClient := clients.NewIdentityClient(identitySrv.URL, identitySrv.Client(), time.Second)
+	handler := newMCPAuthMiddleware(cfg, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("next handler should not be called")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"evalops_deregister","arguments":{}}}`))
+	req.Header.Set("Authorization", "Bearer header.payload.sig")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer error="insufficient_scope" scope="agent:register"` {
+		t.Fatalf("unexpected WWW-Authenticate header %q", got)
+	}
+}
+
 func TestMCPAuthMiddlewareRejectsAudienceMismatch(t *testing.T) {
 	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -167,5 +193,29 @@ func TestMCPAuthMiddlewareAllowsValidBearerToken(t *testing.T) {
 	}
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+}
+
+func TestMCPAuthMiddlewareRejectsBearerTokensWithoutConfiguredResourceURL(t *testing.T) {
+	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"active":true,"audience":["https://attacker-service.example"],"scopes":["agent:register"]}`))
+	}))
+	defer identitySrv.Close()
+
+	identityClient := clients.NewIdentityClient(identitySrv.URL, identitySrv.Client(), time.Second)
+	handler := newMCPAuthMiddleware(config.Config{}, identityClient, authTestLogger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("next handler should not be called")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"evalops_register","arguments":{"agent_type":"codex","surface":"cli"}}}`))
+	req.Header.Set("Authorization", "Bearer header.payload.sig")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "attacker-service.example")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
 	}
 }
