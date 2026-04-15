@@ -3,6 +3,7 @@ package agentmcp
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -12,9 +13,14 @@ const sessionKeyPrefix = "agent-mcp:session:"
 
 // RedisSessionStore persists session state in Redis for horizontal scaling
 // and restart resilience. Keys auto-expire based on the session's ExpiresAt.
+//
+// The local sync.Map tracks which sessions were created by this process so
+// that shutdown cleanup only deregisters its own sessions instead of every
+// session across all replicas.
 type RedisSessionStore struct {
 	client     *redis.Client
 	defaultTTL time.Duration
+	local      sync.Map // sessionID -> struct{} for sessions owned by this instance
 }
 
 func NewRedisSessionStore(client *redis.Client, defaultTTL time.Duration) *RedisSessionStore {
@@ -57,12 +63,14 @@ func (s *RedisSessionStore) Set(sessionID string, state *SessionState) {
 	}
 
 	s.client.Set(ctx, sessionKeyPrefix+sessionID, data, ttl)
+	s.local.Store(sessionID, struct{}{})
 }
 
 func (s *RedisSessionStore) Delete(sessionID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	s.client.Del(ctx, sessionKeyPrefix+sessionID)
+	s.local.Delete(sessionID)
 }
 
 func (s *RedisSessionStore) ActiveCount() int {
@@ -96,6 +104,24 @@ func (s *RedisSessionStore) All() map[string]*SessionState {
 		}
 		snapshot[sessionID] = &state
 	}
+	return snapshot
+}
+
+// LocalSessions returns only sessions created by this process instance.
+// Use this during shutdown to deregister only this replica's sessions
+// instead of all sessions in Redis.
+func (s *RedisSessionStore) LocalSessions() map[string]*SessionState {
+	snapshot := make(map[string]*SessionState)
+	s.local.Range(func(key, _ any) bool {
+		sessionID, ok := key.(string)
+		if !ok {
+			return true
+		}
+		if state, found := s.Get(sessionID); found {
+			snapshot[sessionID] = state
+		}
+		return true
+	})
 	return snapshot
 }
 

@@ -140,3 +140,65 @@ func TestRedisSessionStoreClose(t *testing.T) {
 		t.Fatalf("expected closed client error, got %v", err)
 	}
 }
+
+func TestRedisSessionStoreLocalSessions(t *testing.T) {
+	client, _ := newTestRedis(t)
+
+	store := NewRedisSessionStore(client, time.Hour)
+
+	// Simulate sessions from another replica by writing directly to Redis,
+	// bypassing the store's Set method so they are not tracked locally.
+	ctx := context.Background()
+	otherData := []byte(`{"agent_id":"other_agent","agent_token":"tok_other","agent_type":"claude-code","run_id":"run_other","surface":"cli"}`)
+	client.Set(ctx, sessionKeyPrefix+"sess_other", otherData, time.Hour)
+
+	// Create a session through this store instance — it should be tracked locally.
+	store.Set("sess_local", &SessionState{
+		AgentID:    "local_agent",
+		AgentToken: "tok_local",
+		AgentType:  "claude-code",
+		RunID:      "run_local",
+		Surface:    "cli",
+	})
+
+	// All() should return both sessions (all replicas).
+	all := store.All()
+	if len(all) != 2 {
+		t.Fatalf("expected All() to return 2 sessions, got %d", len(all))
+	}
+
+	// LocalSessions() should return only the session created by this instance.
+	local := store.LocalSessions()
+	if len(local) != 1 {
+		t.Fatalf("expected LocalSessions() to return 1 session, got %d", len(local))
+	}
+	if local["sess_local"] == nil {
+		t.Fatal("expected sess_local in local sessions")
+	}
+	if local["sess_local"].AgentID != "local_agent" {
+		t.Fatalf("expected local_agent, got %s", local["sess_local"].AgentID)
+	}
+}
+
+func TestRedisSessionStoreDeleteRemovesLocal(t *testing.T) {
+	client, _ := newTestRedis(t)
+
+	store := NewRedisSessionStore(client, time.Hour)
+	store.Set("sess_1", &SessionState{AgentID: "a1"})
+	store.Set("sess_2", &SessionState{AgentID: "a2"})
+
+	// Both should be tracked locally.
+	if len(store.LocalSessions()) != 2 {
+		t.Fatalf("expected 2 local sessions, got %d", len(store.LocalSessions()))
+	}
+
+	// Delete one — it should be removed from local tracking too.
+	store.Delete("sess_1")
+	local := store.LocalSessions()
+	if len(local) != 1 {
+		t.Fatalf("expected 1 local session after delete, got %d", len(local))
+	}
+	if local["sess_2"] == nil {
+		t.Fatal("expected sess_2 to remain in local sessions")
+	}
+}
