@@ -56,6 +56,10 @@ url = "https://agent-mcp.evalops.example/mcp"
 bearer_token_env_var = "EVALOPS_TOKEN"
 ```
 
+### Local sidecar federation
+
+If you run `agent-mcp` in the same local environment as the agent, you can skip a separate EvalOps token entirely. Set `DEFAULT_WORKSPACE_ID` plus one of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, or `GOOGLE_OAUTH_ACCESS_TOKEN`, and `evalops_register` will federate that existing provider credential into an EvalOps session automatically.
+
 ## Tools
 
 | Tool | Description |
@@ -74,6 +78,7 @@ All configuration is via environment variables:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `IDENTITY_BASE_URL` | Yes | — | Identity service base URL |
+| `DEFAULT_WORKSPACE_ID` | No | — | Default workspace or organization used when local provider-token federation is enabled |
 | `REGISTRY_BASE_URL` | No | — | Registry service base URL (enables discovery) |
 | `GOVERNANCE_BASE_URL` | No | — | Governance service base URL (enables policy evaluation) |
 | `APPROVALS_BASE_URL` | No | — | Approvals service base URL (enables approval workflows) |
@@ -90,6 +95,8 @@ All configuration is via environment variables:
 | `ADDR` | No | `:8080` | Listen address |
 
 Each downstream service is optional — if its URL is not configured, the corresponding tools degrade gracefully (governance returns allow, metering is a no-op, etc.).
+
+When `DEFAULT_WORKSPACE_ID` is set, `evalops_register` can fall back to identity federation using standard local provider credentials from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, or `GOOGLE_OAUTH_ACCESS_TOKEN`. This is intended for local sidecar usage where `agent-mcp` runs alongside the agent process; hosted multi-tenant deployments should continue to use explicit EvalOps bearer tokens.
 
 All services support mTLS via `*_CA_FILE`, `*_CERT_FILE`, `*_KEY_FILE`, `*_SERVER_NAME` env vars.
 

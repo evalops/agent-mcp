@@ -2,12 +2,15 @@ package agentmcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"connectrpc.com/connect"
 	"github.com/evalops/agent-mcp/internal/clients"
+	"github.com/evalops/agent-mcp/internal/config"
 	agentsv1 "github.com/evalops/proto/gen/go/agents/v1"
 	"github.com/evalops/service-runtime/downstream"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -39,12 +42,9 @@ func (rc *requestContext) toolRegister(
 	_ *mcpsdk.CallToolRequest,
 	input registerInput,
 ) (*mcpsdk.CallToolResult, registerOutput, error) {
-	userToken := strings.TrimSpace(input.UserToken)
-	if userToken == "" {
-		userToken = rc.bearerToken()
-	}
-	if userToken == "" {
-		return nil, registerOutput{}, fmt.Errorf("missing user token: provide user_token or set Authorization bearer header")
+	workspaceID := strings.TrimSpace(input.WorkspaceID)
+	if workspaceID == "" {
+		workspaceID = strings.TrimSpace(rc.deps.Config.Federation.DefaultWorkspaceID)
 	}
 	if strings.TrimSpace(input.AgentType) == "" {
 		return nil, registerOutput{}, fmt.Errorf("agent_type is required")
@@ -53,15 +53,7 @@ func (rc *requestContext) toolRegister(
 		return nil, registerOutput{}, fmt.Errorf("surface is required")
 	}
 
-	session, err := downstream.CallOp(ctx, rc.deps.downstreamClients().Identity, "register", func(ctx context.Context) (clients.AgentSession, error) {
-		return rc.deps.Identity.RegisterAgent(ctx, userToken, clients.RegisterAgentRequest{
-			AgentType:    input.AgentType,
-			Capabilities: input.Capabilities,
-			Scopes:       input.Scopes,
-			Surface:      input.Surface,
-			TTLSeconds:   input.TTLSeconds,
-		})
-	})
+	session, err := rc.registerWithIdentity(ctx, input, workspaceID)
 	if err != nil {
 		rc.logger.Error("identity registration failed", "error", err)
 		return nil, registerOutput{}, fmt.Errorf("identity registration failed: %w", err)
@@ -82,10 +74,10 @@ func (rc *requestContext) toolRegister(
 			AgentType:      input.AgentType,
 			Capabilities:   input.Capabilities,
 			ExpiresAt:      session.ExpiresAt,
-			OrganizationID: input.WorkspaceID,
+			OrganizationID: workspaceID,
 			RunID:          session.RunID,
 			Surface:        input.Surface,
-			WorkspaceID:    input.WorkspaceID,
+			WorkspaceID:    workspaceID,
 		})
 		rc.deps.Metrics.ActiveSessions.Set(float64(rc.deps.Sessions.ActiveCount()))
 	}
@@ -99,8 +91,8 @@ func (rc *requestContext) toolRegister(
 			Capabilities: input.Capabilities,
 			Surfaces:     []string{input.Surface},
 		})
-		if input.WorkspaceID != "" {
-			regReq.Header().Set("X-Workspace-ID", input.WorkspaceID)
+		if workspaceID != "" {
+			regReq.Header().Set("X-Workspace-ID", workspaceID)
 		}
 		regReq.Header().Set("Authorization", "Bearer "+session.AgentToken)
 
@@ -113,7 +105,7 @@ func (rc *requestContext) toolRegister(
 	}
 
 	rc.deps.Metrics.Registrations.WithLabelValues(input.AgentType, input.Surface).Inc()
-	rc.deps.Events.Publish(ctx, input.WorkspaceID, "agent", session.AgentID, "registered", map[string]any{
+	rc.deps.Events.Publish(ctx, workspaceID, "agent", session.AgentID, "registered", map[string]any{
 		"agent_id":         session.AgentID,
 		"agent_type":       input.AgentType,
 		"expires_at":       session.ExpiresAt.Format(time.RFC3339Nano),
@@ -122,7 +114,7 @@ func (rc *requestContext) toolRegister(
 		"scopes_denied":    session.ScopesDenied,
 		"scopes_granted":   session.ScopesGranted,
 		"surface":          input.Surface,
-		"workspace_id":     input.WorkspaceID,
+		"workspace_id":     workspaceID,
 	})
 
 	return nil, registerOutput{
@@ -134,6 +126,141 @@ func (rc *requestContext) toolRegister(
 		ScopesGranted:   session.ScopesGranted,
 		ScopesDenied:    session.ScopesDenied,
 	}, nil
+}
+
+func (rc *requestContext) registerWithIdentity(ctx context.Context, input registerInput, workspaceID string) (clients.AgentSession, error) {
+	userToken := strings.TrimSpace(input.UserToken)
+	if userToken == "" {
+		userToken = rc.bearerToken()
+	}
+	if userToken != "" {
+		session, err := downstream.CallOp(ctx, rc.deps.downstreamClients().Identity, "register", func(ctx context.Context) (clients.AgentSession, error) {
+			return rc.deps.Identity.RegisterAgent(ctx, userToken, clients.RegisterAgentRequest{
+				AgentType:    input.AgentType,
+				Capabilities: input.Capabilities,
+				Scopes:       input.Scopes,
+				Surface:      input.Surface,
+				TTLSeconds:   input.TTLSeconds,
+			})
+		})
+		if err == nil {
+			return session, nil
+		}
+		if !shouldFallbackToFederation(err) {
+			return clients.AgentSession{}, err
+		}
+		provider := inferFederationProvider(input.AgentType)
+		if provider == "" || workspaceID == "" {
+			return clients.AgentSession{}, err
+		}
+		rc.logger.Info("identity registration returned unauthorized, retrying through federation", "agent_type", input.AgentType, "provider", provider)
+		return downstream.CallOp(ctx, rc.deps.downstreamClients().Identity, "federate", func(ctx context.Context) (clients.AgentSession, error) {
+			return rc.deps.Identity.FederateAgent(ctx, clients.FederateAgentRequest{
+				AgentType:      input.AgentType,
+				Capabilities:   input.Capabilities,
+				ExternalToken:  userToken,
+				OrganizationID: workspaceID,
+				Provider:       provider,
+				Scopes:         input.Scopes,
+				Surface:        input.Surface,
+				TTLSeconds:     input.TTLSeconds,
+			})
+		})
+	}
+
+	provider, externalToken := rc.configuredFederationCredential(input.AgentType)
+	if provider == "" || externalToken == "" {
+		return clients.AgentSession{}, fmt.Errorf("missing user token: provide user_token or set Authorization bearer header")
+	}
+	if workspaceID == "" {
+		return clients.AgentSession{}, fmt.Errorf("missing workspace_id: provide workspace_id or set DEFAULT_WORKSPACE_ID for federation")
+	}
+	rc.logger.Info("registering agent through configured federation credential", "agent_type", input.AgentType, "provider", provider)
+	return downstream.CallOp(ctx, rc.deps.downstreamClients().Identity, "federate", func(ctx context.Context) (clients.AgentSession, error) {
+		return rc.deps.Identity.FederateAgent(ctx, clients.FederateAgentRequest{
+			AgentType:      input.AgentType,
+			Capabilities:   input.Capabilities,
+			ExternalToken:  externalToken,
+			OrganizationID: workspaceID,
+			Provider:       provider,
+			Scopes:         input.Scopes,
+			Surface:        input.Surface,
+			TTLSeconds:     input.TTLSeconds,
+		})
+	})
+}
+
+func shouldFallbackToFederation(err error) bool {
+	var httpErr *clients.HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized
+}
+
+func (rc *requestContext) configuredFederationCredential(agentType string) (string, string) {
+	federation := rc.deps.Config.Federation
+	if federation.DefaultWorkspaceID == "" {
+		return "", ""
+	}
+	provider := inferFederationProvider(agentType)
+	if provider != "" {
+		if token := federationTokenForProvider(federation, provider); token != "" {
+			return provider, token
+		}
+	}
+	configured := configuredFederationProviders(federation)
+	if len(configured) == 1 {
+		for onlyProvider, token := range configured {
+			return onlyProvider, token
+		}
+	}
+	return "", ""
+}
+
+func inferFederationProvider(agentType string) string {
+	normalized := strings.ToLower(strings.TrimSpace(agentType))
+	switch {
+	case strings.Contains(normalized, "claude"):
+		return "anthropic"
+	case strings.Contains(normalized, "codex"), strings.Contains(normalized, "openai"):
+		return "openai"
+	case strings.Contains(normalized, "copilot"), strings.Contains(normalized, "github"):
+		return "github"
+	case strings.Contains(normalized, "gemini"), strings.Contains(normalized, "google"):
+		return "google"
+	default:
+		return ""
+	}
+}
+
+func configuredFederationProviders(federation config.FederationConfig) map[string]string {
+	configured := make(map[string]string, 4)
+	if federation.AnthropicAPIKey != "" {
+		configured["anthropic"] = federation.AnthropicAPIKey
+	}
+	if federation.OpenAIAPIKey != "" {
+		configured["openai"] = federation.OpenAIAPIKey
+	}
+	if federation.GitHubToken != "" {
+		configured["github"] = federation.GitHubToken
+	}
+	if federation.GoogleAccessToken != "" {
+		configured["google"] = federation.GoogleAccessToken
+	}
+	return configured
+}
+
+func federationTokenForProvider(federation config.FederationConfig, provider string) string {
+	switch provider {
+	case "anthropic":
+		return federation.AnthropicAPIKey
+	case "openai":
+		return federation.OpenAIAPIKey
+	case "github":
+		return federation.GitHubToken
+	case "google":
+		return federation.GoogleAccessToken
+	default:
+		return ""
+	}
 }
 
 type heartbeatInput struct {
