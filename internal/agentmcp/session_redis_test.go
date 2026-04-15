@@ -259,6 +259,9 @@ func TestRedisSessionStoreExistsErrorDoesNotClaimLocalOwnership(t *testing.T) {
 	store := NewRedisSessionStore(client, time.Hour)
 	store.Set("sess_exists_err", &SessionState{AgentID: "a1"})
 
+	if _, ok := store.Get("sess_exists_err"); !ok {
+		t.Fatal("expected Set to still persist session")
+	}
 	if got := countLocalTrackedSessions(store); got != 0 {
 		t.Fatalf("expected 0 locally tracked sessions when EXISTS fails, got %d", got)
 	}
