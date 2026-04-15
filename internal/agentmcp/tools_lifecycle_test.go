@@ -58,7 +58,9 @@ func newRequestContext(deps *Deps, sessionID string) *requestContext {
 func fakeIdentityServer(session clients.AgentSession) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(session)
+		if err := json.NewEncoder(w).Encode(session); err != nil {
+			panic(err)
+		}
 	}))
 }
 
@@ -309,12 +311,14 @@ func TestToolRegisterConfiguredFederationRequiresDefaultWorkspaceOptIn(t *testin
 
 func TestToolHeartbeat(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(clients.AgentSession{
+		if err := json.NewEncoder(w).Encode(clients.AgentSession{
 			AgentID:    "agent_test",
 			AgentToken: "tok_rotated",
 			ExpiresAt:  time.Now().Add(2 * time.Hour),
 			RunID:      "run_test",
-		})
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -352,9 +356,11 @@ func TestToolHeartbeat(t *testing.T) {
 
 func TestToolHeartbeatWithRegistry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(clients.AgentSession{
+		if err := json.NewEncoder(w).Encode(clients.AgentSession{
 			AgentID: "agent_test", AgentToken: "tok_rotated", ExpiresAt: time.Now().Add(time.Hour),
-		})
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -465,7 +471,9 @@ func TestToolHeartbeatNoSession(t *testing.T) {
 func TestToolDeregister(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"revoked":true}`))
+		if _, err := w.Write([]byte(`{"revoked":true}`)); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
 	}))
 	defer srv.Close()
 

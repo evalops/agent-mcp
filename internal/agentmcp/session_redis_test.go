@@ -110,7 +110,9 @@ func TestRedisSessionStoreAll(t *testing.T) {
 func TestRedisSessionStoreTTL(t *testing.T) {
 	mr := miniredis.RunT(t)
 	ttlClient := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer ttlClient.Close()
+	defer func() {
+		_ = ttlClient.Close()
+	}()
 
 	store := NewRedisSessionStore(ttlClient, time.Hour)
 

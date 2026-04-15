@@ -75,6 +75,8 @@ If you run `agent-mcp` in the same local environment as the agent, you can skip 
 | `evalops_check_action` | Evaluate an action against governance policies |
 | `evalops_check_approval` | Check or wait for an approval request to be resolved |
 | `evalops_report_usage` | Report token usage and cost to the metering service |
+| `evalops_create_api_key` | Create a new headless API key for CI/CD and automation |
+| `evalops_list_api_keys` | List your API keys with names, prefixes, scopes, and usage timestamps |
 
 ## Configuration
 
