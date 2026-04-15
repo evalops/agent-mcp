@@ -1,17 +1,39 @@
 #!/usr/bin/env bash
-STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep "\.go$" || true)
-[ -z "$STAGED" ] && exit 0
-echo "Pre-commit: linting staged Go files..."
-STASH_NAME="pre-commit-$(date +%s)"
-git stash push -q --keep-index -m "$STASH_NAME"
-STASHED=$?
-RESULT=0
-if command -v golangci-lint &>/dev/null; then
-  golangci-lint run --new-from-rev=HEAD ./... || RESULT=$?
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+mapfile -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+if [ ${#staged_go_files[@]} -eq 0 ]; then
+  exit 0
 fi
-if [ $RESULT -eq 0 ]; then
-  go test -race -count=1 ./... || RESULT=$?
+
+stashed=0
+cleanup() {
+  if [ "$stashed" -eq 1 ]; then
+    git stash pop -q >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+if ! git diff --quiet -- . || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  git stash push -q --keep-index --include-untracked -m "pre-commit-$(date +%s)"
+  stashed=1
 fi
-[ $STASHED -eq 0 ] && git stash pop -q 2>/dev/null || true
-[ $RESULT -ne 0 ] && echo "Pre-commit: FAILED"
-exit $RESULT
+
+echo "Running gofmt on staged files..."
+gofmt -w "${staged_go_files[@]}"
+git add -- "${staged_go_files[@]}"
+
+if [ -f .golangci.yml ]; then
+  echo "Running golangci-lint..."
+  golangci-lint run ./...
+else
+  echo "Running go vet..."
+  go vet ./...
+fi
+
+echo "Running go test..."
+go test ./...
