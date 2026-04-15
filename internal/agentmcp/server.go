@@ -139,6 +139,16 @@ func serverForRequest(deps *Deps, r *http.Request) *mcpsdk.Server {
 	}, rc.toolReportUsage)
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "evalops_recall",
+		Description: "Recall prior facts, decisions, and project knowledge from EvalOps memory before planning or taking action",
+	}, rc.toolRecall)
+
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
+		Name:        "evalops_store_memory",
+		Description: "Store durable facts, decisions, or project knowledge in EvalOps memory for future recall",
+	}, rc.toolStoreMemory)
+
+	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "evalops_create_api_key",
 		Description: "Create a new API key for headless authentication such as CI/CD pipelines and automation",
 	}, rc.toolCreateAPIKey)
