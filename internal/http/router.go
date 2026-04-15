@@ -146,18 +146,23 @@ func BuildRouter(ctx context.Context, cfg config.Config, logger *slog.Logger) (*
 
 	cleanup := func(ctx context.Context) {
 		stopReaper()
-		// Redis-backed sessions are shared across replicas, so only local in-memory
-		// sessions should be deregistered during shutdown.
-		if _, sharedStore := sessionStore.(*agentmcp.RedisSessionStore); !sharedStore {
-			sessions := sessionStore.All()
-			if len(sessions) > 0 {
-				logger.Info("graceful shutdown: deregistering active sessions", "count", len(sessions))
-				for _, state := range sessions {
-					if err := identityClient.DeregisterAgent(ctx, state.AgentToken); err != nil {
-						logger.Warn("shutdown deregister failed", "agent_id", state.AgentID, "error", err)
-					} else {
-						logger.Info("shutdown deregistered agent", "agent_id", state.AgentID)
-					}
+		// Deregister sessions owned by this instance. For Redis-backed stores,
+		// only deregister sessions this process created (LocalSessions), not
+		// every session across all replicas. For in-memory stores, All() is
+		// equivalent since all sessions are local.
+		var sessions map[string]*agentmcp.SessionState
+		if redisStore, ok := sessionStore.(*agentmcp.RedisSessionStore); ok {
+			sessions = redisStore.LocalSessions()
+		} else {
+			sessions = sessionStore.All()
+		}
+		if len(sessions) > 0 {
+			logger.Info("graceful shutdown: deregistering active sessions", "count", len(sessions))
+			for _, state := range sessions {
+				if err := identityClient.DeregisterAgent(ctx, state.AgentToken); err != nil {
+					logger.Warn("shutdown deregister failed", "agent_id", state.AgentID, "error", err)
+				} else {
+					logger.Info("shutdown deregistered agent", "agent_id", state.AgentID)
 				}
 			}
 		}
