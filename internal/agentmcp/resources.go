@@ -36,6 +36,9 @@ const protocolInstructions = "## EvalOps Agent Protocol\n" +
 	"\"api_call\", \"message_send\")\n" +
 	"- `description`: human-readable summary of what the action will do\n" +
 	"- `risk_level`: your assessment \u2014 LOW, MEDIUM, HIGH, or CRITICAL\n" +
+	"- keep your local `evalops-agent-hook` at or above the version advertised " +
+	"in `evalops://agent/hook-requirements`; older binaries treat newer " +
+	"approval responses such as `AUTO_APPROVED` as denials\n" +
 	"\n" +
 	"**Responses:**\n" +
 	"- `allow` \u2014 proceed with the action\n" +
@@ -50,6 +53,12 @@ const protocolInstructions = "## EvalOps Agent Protocol\n" +
 	"with model name, input/output token counts, and cost if known. This " +
 	"enables cost attribution and budget enforcement.\n"
 
+const (
+	agentHookRequirementsURI       = "evalops://agent/hook-requirements"
+	minimumSupportedHookVersion    = "v0.1.36"
+	serviceRuntimeReleasesDownload = "https://github.com/evalops/service-runtime/releases"
+)
+
 func registerResources(server *mcpsdk.Server, deps *Deps, sessionID string) {
 	server.AddResource(&mcpsdk.Resource{
 		URI:         "evalops://agent/status",
@@ -58,6 +67,15 @@ func registerResources(server *mcpsdk.Server, deps *Deps, sessionID string) {
 		MIMEType:    "application/json",
 	}, func(_ context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
 		return readAgentStatus(deps, sessionID)
+	})
+
+	server.AddResource(&mcpsdk.Resource{
+		URI:         agentHookRequirementsURI,
+		Name:        "Agent Hook Requirements",
+		Description: "Operational guidance for local EvalOps agent tooling, including the minimum required hook binary version",
+		MIMEType:    "application/json",
+	}, func(_ context.Context, _ *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+		return readHookRequirements(deps, sessionID)
 	})
 
 	server.AddResource(&mcpsdk.Resource{
@@ -108,6 +126,31 @@ func readAgentStatus(deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, 
 		"expires_at":      state.ExpiresAt.Format("2006-01-02T15:04:05Z"),
 		"active_sessions": deps.Sessions.ActiveCount(),
 	})
+}
+
+func readHookRequirements(deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, error) {
+	state, _ := deps.Sessions.Get(sessionID)
+
+	data := map[string]any{
+		"available":                              true,
+		"minimum_hook_version":                   minimumSupportedHookVersion,
+		"hook_release_download_url":              serviceRuntimeReleasesDownload,
+		"auto_approved_decisions_require_update": true,
+		"message":                                fmt.Sprintf("Update your local evalops-agent-hook to %s or newer. Older hook binaries deny AUTO_APPROVED approval decisions with no local remediation hint.", minimumSupportedHookVersion),
+		"instructions": []string{
+			fmt.Sprintf("Install evalops-agent-hook %s or newer from the service-runtime releases.", minimumSupportedHookVersion),
+			"If your local hook predates this version, AUTO_APPROVED decisions are treated as denials.",
+			"After replacing the binary, restart your local agent session so the updated hook is used for new PreToolUse checks.",
+		},
+	}
+	if state != nil {
+		data["agent_id"] = state.AgentID
+		data["workspace_id"] = state.WorkspaceID
+		data["organization_id"] = state.OrganizationID
+		data["surface"] = state.Surface
+	}
+
+	return jsonResource(agentHookRequirementsURI, data)
 }
 
 func readApprovalHabits(ctx context.Context, deps *Deps, sessionID string) (*mcpsdk.ReadResourceResult, error) {

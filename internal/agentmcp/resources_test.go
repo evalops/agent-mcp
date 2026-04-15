@@ -53,6 +53,41 @@ func TestReadAgentStatusWithSession(t *testing.T) {
 	}
 }
 
+func TestReadHookRequirementsIncludesMinimumHookVersion(t *testing.T) {
+	deps := &Deps{Sessions: NewSessionStore(), Config: config.Config{}}
+	deps.Sessions.Set("sess_1", &SessionState{
+		AgentID:        "agent_abc",
+		Surface:        "cli",
+		WorkspaceID:    "ws_1",
+		OrganizationID: "org_1",
+	})
+
+	result, err := readHookRequirements(deps, "sess_1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Contents) != 1 {
+		t.Fatal("expected 1 content block")
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal([]byte(result.Contents[0].Text), &data); err != nil {
+		t.Fatalf("unmarshal instructions: %v", err)
+	}
+	if got := data["minimum_hook_version"]; got != minimumSupportedHookVersion {
+		t.Fatalf("minimum_hook_version = %v, want %s", got, minimumSupportedHookVersion)
+	}
+	if got := data["hook_release_download_url"]; got != serviceRuntimeReleasesDownload {
+		t.Fatalf("hook_release_download_url = %v, want %s", got, serviceRuntimeReleasesDownload)
+	}
+	if got := data["auto_approved_decisions_require_update"]; got != true {
+		t.Fatalf("auto_approved_decisions_require_update = %v, want true", got)
+	}
+	if got := data["workspace_id"]; got != "ws_1" {
+		t.Fatalf("workspace_id = %v, want ws_1", got)
+	}
+}
+
 func TestReadApprovalHabitsNoService(t *testing.T) {
 	deps := &Deps{Sessions: NewSessionStore(), Config: config.Config{}}
 
