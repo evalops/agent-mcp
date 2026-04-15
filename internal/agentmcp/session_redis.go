@@ -62,8 +62,13 @@ func (s *RedisSessionStore) Set(sessionID string, state *SessionState) {
 		}
 	}
 
+	existed := s.client.Exists(ctx, sessionKeyPrefix+sessionID).Val() > 0
 	s.client.Set(ctx, sessionKeyPrefix+sessionID, data, ttl)
-	s.local.Store(sessionID, struct{}{})
+	// Only claim local ownership for new sessions. Heartbeats routed
+	// to a different replica must not claim the session.
+	if !existed {
+		s.local.Store(sessionID, struct{}{})
+	}
 }
 
 func (s *RedisSessionStore) Delete(sessionID string) {
