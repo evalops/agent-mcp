@@ -5,20 +5,19 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"github.com/evalops/agent-mcp/internal/config"
-	httpapi "github.com/evalops/agent-mcp/internal/http"
+	"github.com/evalops/agent-mcp/internal/agentmcp/config"
+	httpapi "github.com/evalops/agent-mcp/internal/agentmcp/http"
 	"github.com/evalops/service-runtime/mtls"
+	"github.com/evalops/service-runtime/startup"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg := config.Load()
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := startup.NotifyContext()
 	defer stop()
 
 	result, err := httpapi.BuildRouter(ctx, cfg, logger)
@@ -40,22 +39,26 @@ func main() {
 	}
 	server.TLSConfig = serverTLSConfig
 
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-		result.Cleanup(shutdownCtx)
-	}()
+	lifecycle := startup.NewLifecycle()
+	lifecycle.OnShutdown("router cleanup", func(ctx context.Context) error {
+		result.Cleanup(ctx)
+		return nil
+	})
 
-	logger.Info("starting service", "service", cfg.ServiceName, "addr", cfg.Addr, "session_store", cfg.Session.Store)
-	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
-		err = server.ListenAndServeTLS("", "")
-	} else {
-		err = server.ListenAndServe()
-	}
-	if err != nil && err != http.ErrServerClosed {
-		logger.Error("listen failed", "error", err)
+	logger = logger.With("session_store", cfg.Session.Store)
+	if err := startup.RunHTTPServer(ctx, startup.HTTPServerConfig{
+		ServiceName:     cfg.ServiceName,
+		Addr:            cfg.Addr,
+		Version:         cfg.Version,
+		Server:          server,
+		ShutdownTimeout: cfg.ShutdownTimeout,
+		Lifecycle:       lifecycle,
+		Logger:          logger,
+		TLSCertFile:     cfg.TLS.CertFile,
+		TLSKeyFile:      cfg.TLS.KeyFile,
+		TLSClientCAFile: cfg.TLS.ClientCAFile,
+	}); err != nil {
+		logger.Error("agent-mcp exited", "error", err)
 		os.Exit(1)
 	}
 }
