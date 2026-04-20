@@ -3,7 +3,7 @@ module github.com/evalops/agent-mcp
 go 1.26.0
 
 require (
-	connectrpc.com/connect v1.19.1
+	connectrpc.com/connect v1.19.2
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/evalops/proto v0.0.0-20260414193513-3db7075bd55b
 	github.com/evalops/service-runtime v0.1.48
